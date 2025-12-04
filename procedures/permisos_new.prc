@@ -1,346 +1,503 @@
-create or replace procedure rrhh.PERMISOS_NEW(
-          V_ID_ANO in number,
-          V_ID_FUNCIONARIO in number,
-          V_ID_TIPO_FUNCIONARIO in out varchar2,
-          V_ID_TIPO_PERMISO in varchar2,
-          V_ID_ESTADO_PERMISO in varchar2,
-          V_ID_TIPO_DIAS in VARCHAR2,
-          V_FECHA_INICIO in DATE,
-          V_FECHA_FIN in out DATE,
-          V_HORA_INICIO  in out varchar2,
-          V_HORA_FIN  in out varchar2,
-          V_ID_GRADO IN VARCHAR2,
-          V_DPROVINCIA IN VARCHAR2,
-          V_JUSTIFICACION in  varchar2,
-            v_T1 in varchar2,
-          v_T2 in varchar2,
-          v_t3 in varchar2,
-          V_UNICO in out varchar2,
-          V_IP in varchar2,msgsalida out varchar2,todook out varchar2,v_enlace_fichero out varchar2) is
-i_ficha number;
-v_num_dias number;
-v_id_tipo_dias_per varchar2(1);
-v_codpers varchar2(5);
-v_total_horas number;
-i_todo_ok_B number;
-msgBasico  varchar2(256);
-v_id_tipo_dias_ent  varchar2(256);
-i_codpers varchar(5);
-i_id_funcionario number;
-v_num_dias_tiene_per number;
-V_GUARDIAS varchar2(1256);
-v_justificacion2 varchar2(4);
-i_num_dias_laborables number;
+--------------------------------------------------------------------------------
+-- PROCEDURE: PERMISOS_NEW
+--------------------------------------------------------------------------------
+-- Prop贸sito: Crear nueva solicitud de permiso con validaciones completas
+-- Autor: RRHH / Optimizado por Carlos (04/12/2025)
+-- Versi贸n: 2.0.0
+--
+-- Descripci贸n:
+--   Procedimiento principal para la creaci贸n de permisos de empleados.
+--   Realiza validaciones exhaustivas seg煤n tipo de permiso, funcionario y
+--   reglas de negocio (vacaciones, compensatorios, turnos, etc.)
+--
+-- Par谩metros:
+--   V_ID_ANO              - A帽o del permiso
+--   V_ID_FUNCIONARIO      - ID del empleado
+--   V_ID_TIPO_FUNCIONARIO - Tipo de funcionario (IN OUT)
+--   V_ID_TIPO_PERMISO     - C贸digo de tipo de permiso
+--   V_ID_ESTADO_PERMISO   - Estado inicial del permiso
+--   V_ID_TIPO_DIAS        - Tipo de d铆as (L=Laborables, N=Naturales)
+--   V_FECHA_INICIO        - Fecha inicio del permiso
+--   V_FECHA_FIN           - Fecha fin del permiso (IN OUT)
+--   V_HORA_INICIO         - Hora inicio (IN OUT, formato HH24:MI)
+--   V_HORA_FIN            - Hora fin (IN OUT, formato HH24:MI)
+--   V_ID_GRADO            - Grado del permiso
+--   V_DPROVINCIA          - Provincia para permisos de desplazamiento
+--   V_JUSTIFICACION       - Requiere justificaci贸n (SI/NO)
+--   v_T1, v_T2, v_T3      - Turnos (bomberos)
+--   V_UNICO               - Permiso 煤nico (actualiza contador, IN OUT)
+--   V_IP                  - IP origen de la solicitud
+--   msgsalida             - Mensaje resultado (OUT)
+--   todook                - Estado operaci贸n: 0=OK, 1=Error (OUT)
+--   v_enlace_fichero      - ID fichero justificante (OUT)
+--
+-- Validaciones realizadas:
+--   1. Validaci贸n b谩sica (fechas, solapamientos, reglas generales)
+--   2. Validaci贸n de vacaciones seg煤n tipo de funcionario
+--   3. Validaci贸n de compensatorios y bolsas de horas
+--   4. Validaci贸n de turnos para bomberos
+--   5. Validaci贸n de l铆mites de d铆as laborables
+--   6. Actualizaci贸n de contadores para permisos 煤nicos
+--
+-- Excepciones:
+--   - Permisos 11100, 11300: Solo tramitables por RRHH
+--   - Vacaciones: L铆mite 22 d铆as laborables
+--   - Compensatorios: Verificaci贸n de saldo disponible
+--
+-- Historial:
+--   04/12/2025 - Carlos - Optimizaci贸n v2.0: Constantes, documentaci贸n, 
+--                         variables optimizadas, manejo de errores mejorado
+--   04/03/2025 - CHM - Mejora validaci贸n justificaci贸n
+--   11/10/2022 - CHM - Control turnos bomberos
+--   25/01/2017 - CHM - Control de turnos
+--   01/03/2013 - A帽adido control permisos RRHH
+--------------------------------------------------------------------------------
 
-i_t1 number;
+CREATE OR REPLACE PROCEDURE RRHH.PERMISOS_NEW(
+  V_ID_ANO              IN NUMBER,
+  V_ID_FUNCIONARIO      IN NUMBER,
+  V_ID_TIPO_FUNCIONARIO IN OUT VARCHAR2,
+  V_ID_TIPO_PERMISO     IN VARCHAR2,
+  V_ID_ESTADO_PERMISO   IN VARCHAR2,
+  V_ID_TIPO_DIAS        IN VARCHAR2,
+  V_FECHA_INICIO        IN DATE,
+  V_FECHA_FIN           IN OUT DATE,
+  V_HORA_INICIO         IN OUT VARCHAR2,
+  V_HORA_FIN            IN OUT VARCHAR2,
+  V_ID_GRADO            IN VARCHAR2,
+  V_DPROVINCIA          IN VARCHAR2,
+  V_JUSTIFICACION       IN VARCHAR2,
+  v_T1                  IN VARCHAR2,
+  v_T2                  IN VARCHAR2,
+  v_T3                  IN VARCHAR2,
+  V_UNICO               IN OUT VARCHAR2,
+  V_IP                  IN VARCHAR2,
+  msgsalida             OUT VARCHAR2,
+  todook                OUT VARCHAR2,
+  v_enlace_fichero      OUT VARCHAR2
+) IS
+  
+  --------------------------------------------------------------------------------
+  -- CONSTANTES
+  --------------------------------------------------------------------------------
+  C_OK CONSTANT VARCHAR2(1) := '0';
+  C_ERROR CONSTANT VARCHAR2(1) := '1';
+  
+  -- Tipos de permiso especiales (solo RRHH)
+  C_PERMISO_BAJA_ENFERMEDAD_1 CONSTANT VARCHAR2(5) := '11100';
+  C_PERMISO_BAJA_ENFERMEDAD_2 CONSTANT VARCHAR2(5) := '11300';
+  
+  -- Tipos de permiso con validaciones espec铆ficas
+  C_PERMISO_VACACIONES CONSTANT VARCHAR2(5) := '01000';
+  C_PERMISO_VACACIONES_2 CONSTANT VARCHAR2(5) := '02000';
+  C_PERMISO_COMPENSATORIO CONSTANT VARCHAR2(5) := '15000';
+  C_PERMISO_CONCILIACION CONSTANT VARCHAR2(5) := '40000';
+  C_PERMISO_VACACIONES_EXTRA CONSTANT VARCHAR2(5) := '02015';
+  
+  -- Tipos de funcionario
+  C_TIPO_FUNC_BOMBERO CONSTANT NUMBER := 23;
+  C_TIPO_FUNC_ESPECIAL CONSTANT NUMBER := 21;
+  C_TIPO_FUNC_ID_ESPECIAL CONSTANT NUMBER := 961388; -- ID funcionario con tipo 10
+  
+  -- L铆mites
+  C_MAX_DIAS_VACACIONES_LAB CONSTANT NUMBER := 22; -- D铆as laborables m谩ximos
+  C_LONGITUD_HORA CONSTANT NUMBER := 5; -- HH24:MI
+  
+  -- Valores por defecto
+  C_JUSTIF_NO CONSTANT VARCHAR2(2) := 'NO';
+  C_JUSTIF_SI CONSTANT VARCHAR2(2) := 'SI';
+  
+  --------------------------------------------------------------------------------
+  -- VARIABLES LOCALES (OPTIMIZADAS)
+  --------------------------------------------------------------------------------
+  
+  -- Variables de control
+  i_ficha NUMBER(1) := 0;
+  i_todo_ok_B NUMBER(1);
+  i_t1 NUMBER(1) := 0;
+  
+  -- Variables de c谩lculo
+  v_num_dias NUMBER(5, 2);
+  v_num_dias_tiene_per NUMBER(5, 2);
+  i_num_dias_laborables NUMBER(3);
+  v_total_horas NUMBER(5, 2);
+  
+  -- Variables de tipo/estado
+  v_id_tipo_dias_per VARCHAR2(1);
+  v_id_tipo_dias_ent VARCHAR2(1);
+  v_justificacion2 VARCHAR2(2);
+  
+  -- Variables de identificaci贸n
+  v_codpers VARCHAR2(5);
+  i_codpers VARCHAR2(5);
+  
+  -- Variables de texto
+  msgBasico VARCHAR2(500);
+  V_GUARDIAS VARCHAR2(1000) := '';
 
-begin
-todook:='1';
-v_id_tipo_dias_ent:=V_ID_TIPO_DIAS;
 
-V_GUARDIAS:='';
-
-V_HORA_INICIO:=substr(V_HORA_INICIO,1,5);
-V_HORA_FIN:=substr(V_HORA_FIN,1,5);
-
-v_justificacion2:='NO';
---chm 04/03/2025
-if V_JUSTIFICACION = 'NO' OR  V_JUSTIFICACION is null OR  V_JUSTIFICACION ='--'  THEN 
- 
 BEGIN
-    select DECODE(JUSTIFICACION,'SI','NO',JUSTIFICACION)
-    into v_justificacion2
-    from  tr_tipo_permiso tr
-    where tr.id_ano=V_ID_ANO and --incluida salian 2 lineas
-          tr.id_tipo_permiso=V_ID_TIPO_PERMISO and rownum<2;
-EXCEPTION
+  
+  --------------------------------------------------------------------------------
+  -- FASE 1: INICIALIZACI脫N
+  --------------------------------------------------------------------------------
+  
+  -- Estado inicial: error hasta que se complete correctamente
+  todook := C_ERROR;
+  v_id_tipo_dias_ent := V_ID_TIPO_DIAS;
+  
+  -- Normalizar horas a formato HH24:MI (primeros 5 caracteres)
+  V_HORA_INICIO := SUBSTR(V_HORA_INICIO, 1, C_LONGITUD_HORA);
+  V_HORA_FIN := SUBSTR(V_HORA_FIN, 1, C_LONGITUD_HORA);
+  
+  -- Inicializar justificaci贸n por defecto
+  v_justificacion2 := C_JUSTIF_NO;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: DETERMINAR REQUERIMIENTO DE JUSTIFICACI脫N
+  -- Actualizaci贸n: 04/03/2025 - CHM
+  --------------------------------------------------------------------------------
+  
+  IF V_JUSTIFICACION = C_JUSTIF_NO OR V_JUSTIFICACION IS NULL OR V_JUSTIFICACION = '--' THEN
+    -- Consultar si el tipo de permiso requiere justificaci贸n
+    BEGIN
+      SELECT DECODE(JUSTIFICACION, C_JUSTIF_SI, C_JUSTIF_NO, JUSTIFICACION)
+        INTO v_justificacion2
+        FROM tr_tipo_permiso tr
+       WHERE tr.id_ano = V_ID_ANO
+         AND tr.id_tipo_permiso = V_ID_TIPO_PERMISO
+         AND ROWNUM < 2;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        v_justificacion2 := C_JUSTIF_NO;
+    END;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: VALIDACIONES DE NEGOCIO ESPEC脥FICAS
+  --------------------------------------------------------------------------------
+  
+  -- Validaci贸n 1: Funcionario especial con tipo 10
+  IF V_ID_FUNCIONARIO = C_TIPO_FUNC_ID_ESPECIAL THEN
+    V_ID_TIPO_FUNCIONARIO := 10;
+  END IF;
+  
+  -- Validaci贸n 2: Permisos solo tramitables por RRHH
+  -- A帽adido: 01/03/2013 - Descuento por baja enfermedad justificada
+  IF V_ID_TIPO_PERMISO IN (C_PERMISO_BAJA_ENFERMEDAD_1, C_PERMISO_BAJA_ENFERMEDAD_2) THEN
+    todook := C_ERROR;
+    msgsalida := 'Este permiso es procesado solamente por RRHH. Perd贸n por las molestias.';
+    ROLLBACK;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: PROCESAMIENTO DE TURNOS (BOMBEROS)
+  -- Actualizaci贸n: 25/01/2017 - CHM - Control de turnos
+  -- Actualizaci贸n: 11/10/2022 - CHM - Ajuste fecha fin seg煤n turno
+  --------------------------------------------------------------------------------
+  
+  -- Contar n煤mero de turnos seleccionados
+  i_t1 := 0;
+  
+  IF v_T1 = '1' THEN
+    i_t1 := i_t1 + 1;
+    -- Para bomberos (excepto vacaciones), fecha fin = fecha inicio
+    IF V_ID_TIPO_PERMISO <> C_PERMISO_VACACIONES AND V_ID_TIPO_FUNCIONARIO = C_TIPO_FUNC_BOMBERO THEN
+      V_FECHA_FIN := V_FECHA_INICIO;
+    END IF;
+  END IF;
+  
+  IF v_T2 = '1' THEN
+    i_t1 := i_t1 + 1;
+    -- Para bomberos (excepto vacaciones), fecha fin = fecha inicio + 1 d铆a
+    IF V_ID_TIPO_PERMISO <> C_PERMISO_VACACIONES AND V_ID_TIPO_FUNCIONARIO = C_TIPO_FUNC_BOMBERO THEN
+      V_FECHA_FIN := V_FECHA_INICIO + 1; -- A帽adido 15/11/2022
+    END IF;
+  END IF;
+  
+  IF v_T3 = '1' THEN
+    i_t1 := i_t1 + 1;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 5: VALIDACI脫N B脕SICA
+  -- Comprobaci贸n de fechas, solapamientos y reglas generales
+  --------------------------------------------------------------------------------
+  
+  Chequeo_Basico_NEW(
+    V_ID_ANO,
+    V_ID_FUNCIONARIO,
+    V_ID_TIPO_FUNCIONARIO,
+    V_ID_TIPO_PERMISO,
+    v_id_tipo_dias_ent,
+    V_FECHA_INICIO,
+    V_FECHA_FIN,
+    V_HORA_INICIO,
+    V_HORA_FIN,
+    V_UNICO,
+    V_DPROVINCIA,
+    V_ID_GRADO,
+    i_t1,
+    v_num_dias,
+    v_id_tipo_dias_per,
+    v_num_dias_tiene_per,
+    i_todo_ok_B,
+    msgBasico,
+    0,
+    0
+  );
+  
+  -- Si hay errores en validaci贸n b谩sica, terminar
+  IF i_todo_ok_B = 1 THEN
+    msgsalida := msgBasico;
+    ROLLBACK;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 6: VALIDACI脫N DE VACACIONES (FUNCIONARIOS GENERALES)
+  --------------------------------------------------------------------------------
+  
+  IF (V_ID_TIPO_PERMISO = C_PERMISO_VACACIONES OR
+      V_ID_TIPO_PERMISO = C_PERMISO_VACACIONES_2 OR
+      SUBSTR(V_ID_TIPO_PERMISO, 1, 3) = '030' OR
+      V_ID_TIPO_PERMISO = C_PERMISO_COMPENSATORIO OR
+      V_ID_TIPO_PERMISO = C_PERMISO_VACACIONES_EXTRA) 
+     AND V_ID_TIPO_FUNCIONARIO <> C_TIPO_FUNC_BOMBERO THEN
+    
+    chequeo_vacaciones_new(
+      v_id_ano,
+      v_id_funcionario,
+      v_id_tipo_funcionario,
+      v_id_tipo_permiso,
+      v_id_tipo_dias_ent,
+      v_fecha_inicio,
+      v_fecha_fin,
+      v_num_dias,
+      i_todo_ok_B,
+      msgBasico,
+      0 -- Comprobar reglas
+    );
+    
+    -- Si hay errores en validaci贸n de vacaciones, terminar
+    IF i_todo_ok_B = 1 THEN
+      msgsalida := msgBasico;
+      ROLLBACK;
+      RETURN;
+    END IF;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 7: VALIDACI脫N DE VACACIONES BOMBEROS
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_TIPO_PERMISO = C_PERMISO_VACACIONES AND V_ID_TIPO_FUNCIONARIO = C_TIPO_FUNC_BOMBERO THEN
+    Chequeo_VACACIONES_BOMBEROS(
+      v_id_ano,
+      v_id_funcionario,
+      v_id_tipo_funcionario,
+      v_id_tipo_permiso,
+      v_id_tipo_dias_ent,
+      v_fecha_inicio,
+      v_fecha_fin,
+      v_num_dias,
+      V_GUARDIAS,
+      i_todo_ok_B,
+      msgBasico,
+      1 -- Comprobar reglas
+    );
+    
+    -- Si hay errores, terminar
+    IF i_todo_ok_B = 1 THEN
+      msgsalida := msgBasico;
+      ROLLBACK;
+      RETURN;
+    END IF;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 8: VALIDACI脫N DE BOLSA DE CONCILIACI脫N
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_TIPO_PERMISO = C_PERMISO_CONCILIACION THEN
+    chequeo_bolsa_concilia(
+      v_id_ano,
+      v_id_funcionario,
+      v_fecha_inicio,
+      v_fecha_fin,
+      v_hora_inicio,
+      v_hora_fin,
+      v_total_horas,
+      i_todo_ok_B,
+      msgBasico
+    );
+    
+    -- Si no hay saldo suficiente, terminar
+    IF i_todo_ok_B = 1 THEN
+      msgsalida := msgBasico;
+      ROLLBACK;
+      RETURN;
+    END IF;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 9: VALIDACI脫N DE COMPENSATORIO
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_TIPO_PERMISO = C_PERMISO_COMPENSATORIO THEN
+    chequeo_compensatorio(
+      v_id_ano,
+      v_id_funcionario,
+      v_fecha_inicio,
+      v_fecha_fin,
+      v_hora_inicio,
+      v_hora_fin,
+      v_total_horas,
+      i_todo_ok_B,
+      msgBasico
+    );
+    
+    -- Si no hay saldo suficiente, terminar
+    IF i_todo_ok_B = 1 THEN
+      msgsalida := msgBasico;
+      ROLLBACK;
+      RETURN;
+    END IF;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 10: ACTUALIZACI脫N DE CONTADORES (PERMISOS 脷NICOS)
+  -- Validaci贸n especial para vacaciones: m谩ximo 22 d铆as laborables
+  --------------------------------------------------------------------------------
+  
+  IF V_UNICO = C_JUSTIF_SI AND V_ID_TIPO_PERMISO <> C_PERMISO_COMPENSATORIO THEN
+    
+    -- Validaci贸n especial: l铆mite de 22 d铆as laborables para vacaciones
+    -- A帽adido: 11/06/2020
+    IF V_ID_TIPO_PERMISO = C_PERMISO_VACACIONES 
+       AND V_ID_TIPO_FUNCIONARIO NOT IN (C_TIPO_FUNC_BOMBERO, C_TIPO_FUNC_ESPECIAL) THEN
+      
+      -- Calcular d铆as laborables efectivos
+      i_num_dias_laborables := calcula_laborales_vaca(
+        V_FECHA_INICIO,
+        V_FECHA_FIN,
+        V_ID_TIPO_DIAS_PER,
+        V_ID_FUNCIONARIO,
+        V_ID_ANO
+      );
+      
+      -- Validar l铆mite
+      IF i_num_dias_laborables > C_MAX_DIAS_VACACIONES_LAB THEN
+        msgsalida := 'Las vacaciones superan el l铆mite de ' || C_MAX_DIAS_VACACIONES_LAB || ' d铆as laborables.';
+        ROLLBACK;
+        RETURN;
+      END IF;
+    END IF;
+    
+    -- Actualizar contador del permiso 煤nico
+    ACTUALIZAR_UNICO_NEW(
+      V_ID_ANO,
+      V_ID_FUNCIONARIO,
+      V_ID_TIPO_FUNCIONARIO,
+      V_ID_TIPO_PERMISO,
+      v_id_tipo_dias_ent,
+      V_ID_TIPO_DIAS_PER,
+      V_FECHA_INICIO,
+      V_FECHA_FIN,
+      V_NUM_DIAS,
+      v_num_dias_tiene_per,
+      i_todo_ok_B,
+      msgBasico,
+      0,
+      i_num_dias_laborables
+    );
+    
+    -- Si hay errores en actualizaci贸n, terminar
+    IF i_todo_ok_B = 1 THEN
+      msgsalida := msgBasico;
+      ROLLBACK;
+      RETURN;
+    END IF;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 11: INSERCI脫N DEL PERMISO Y ENV脥O DE NOTIFICACIONES
+  --------------------------------------------------------------------------------
+  
+  inserta_permiso_new(
+    v_id_ano,
+    v_id_funcionario,
+    v_id_tipo_funcionario,
+    v_id_tipo_permiso,
+    v_id_tipo_dias_ent,
+    v_fecha_inicio,
+    v_fecha_fin,
+    v_hora_inicio,
+    v_hora_fin,
+    v_unico,
+    v_dprovincia,
+    v_id_GRADO,
+    v_justificacion2,
+    v_num_dias,
+    v_total_horas,
+    v_T1,
+    v_T2,
+    v_T3,
+    V_GUARDIAS,
+    i_todo_ok_B,
+    msgBasico,
+    v_enlace_fichero
+  );
+  
+  -- Si hay errores en inserci贸n, terminar
+  IF i_todo_ok_B = 1 THEN
+    msgsalida := msgBasico;
+    ROLLBACK;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 12: VERIFICAR SI EL FUNCIONARIO TIENE FICHAJE ACTIVO
+  -- Fecha: 22/10/2006
+  -- Modificaci贸n: 24/03/2010 - Uso de LPAD para comparaci贸n
+  --------------------------------------------------------------------------------
+  
+  i_ficha := 1;
+  BEGIN
+    SELECT DISTINCT codpers
+      INTO i_codpers
+      FROM personal_new p, presenci pr, apliweb_usuario u
+     WHERE p.id_funcionario = V_ID_FUNCIONARIO
+       AND LPAD(TO_CHAR(p.id_funcionario), 6, '0') = LPAD(u.id_funcionario, 6, '0')
+       AND u.id_fichaje IS NOT NULL
+       AND u.id_fichaje = pr.codpers
+       AND codinci <> 999
+       AND ROWNUM < 2;
+  EXCEPTION
     WHEN NO_DATA_FOUND THEN
-         v_justificacion2:='NO';
-END;
-
-end if;
-/*
-todook:='1';
-  msgsalida:='Por motivos de Administraci髇 no se pueden solicitar permisos. Perd髇 por las molestias. ' ||  V_JUSTIFICACION2 || ' JUST'||  V_JUSTIFICACION;
-  return;
-rollback;
-
-todook:='1';
-  msgsalida:='Por motivos de Administraci髇 no se pueden solicitar permisos desde las 10:00 a las 12:00. Perd髇 por las molestias. ' ||  V_ID_TIPO_FUNCIONARIO;
-
-   return;
-rollback;
-*/
-
-IF V_ID_FUNCIONARIO=961388 THEN
-   V_ID_TIPO_FUNCIONARIO:=10;
-END IF;
-
-
- --Descuento por baja por enfermedad justificadas
- --A馻dido 01/03/2013
- --Solo se puede pedir por RRHH
- IF V_ID_TIPO_PERMISO='11100' OR V_ID_TIPO_PERMISO='11300' THEN
-    todook:='1';
-    msgsalida:='Este permiso es procesado solamente por RRHH. Perd髇 por las molestias.';
-   return;
-   rollback;
- END IF;
-
- --chm 25/01/2017
- --a馻dido para el control de turnos.Numero de d韆s
- --a馻dido para control que la fecha fin sea igual fecha inicio para turnos 1-2.
-  --A袮DIDO 11/10/2022
- i_t1:=0;
- IF V_T1 = '1' THEN
-   i_t1:=i_t1+1;
-   --A袮DIDO 11/10/2022
-   IF (V_ID_TIPO_PERMISO<>'01000'  AND  V_ID_TIPO_FUNCIONARIO = 23) then
-          V_FECHA_FIN := V_FECHA_INICIO;
-   END IF;
- END IF;
-
- IF V_T2 = '1' THEN
-   i_t1:=i_t1+1;
-    --A袮DIDO 11/10/2022
-   IF (V_ID_TIPO_PERMISO<>'01000'  AND  V_ID_TIPO_FUNCIONARIO = 23) then
-          V_FECHA_FIN := V_FECHA_INICIO+1;--a馻dido +1 //15/11/2022
-   END IF;
- END IF;
-
- IF V_T3 = '1' THEN
-   i_t1:=i_t1+1;
-
- END IF;
-
---Comprobacion de que el permiso esta correcto.
-Chequeo_Basico_NEW
-       (V_ID_ANO,
-        V_ID_FUNCIONARIO ,
-        V_ID_TIPO_FUNCIONARIO ,
-        V_ID_TIPO_PERMISO ,
-        v_id_tipo_dias_ent ,
-        V_FECHA_INICIO ,
-        V_FECHA_FIN ,
-        V_HORA_INICIO  ,
-        V_HORA_FIN  ,
-        V_UNICO ,
-        V_DPROVINCIA ,V_ID_GRADO, i_t1,
-        v_num_dias,v_id_tipo_dias_per,v_num_dias_tiene_per,
-        i_todo_ok_B,msgBasico,0,0);
-
---Hay errores fin
-IF i_todo_ok_B=1 then
-   msgsalida:=msgbasico;
-   rollback;
-   return;
-END IF;
-
---Comprobacion de vacaciones
-IF (V_ID_TIPO_PERMISO='01000'  OR
-   V_ID_TIPO_PERMISO='02000' or
-   SUBSTR(V_ID_TIPO_PERMISO,1,3)='030'  OR
-  -- V_ID_TIPO_PERMISO='01015' OR quitado VACACIONES dias extra peticion RRHH
-   V_ID_TIPO_PERMISO='15000' OR
-   V_ID_TIPO_PERMISO='02015'  ) and    V_ID_TIPO_FUNCIONARIO <> 23
-                                           THEN
-
-
-
-     chequeo_vacaciones_new(v_id_ano ,
-                   v_id_funcionario,
-                   v_id_tipo_funcionario,
-                   v_id_tipo_permiso,
-                   v_id_tipo_dias_ent ,
-                   v_fecha_inicio ,
-                   v_fecha_fin ,
-                   v_num_dias ,
-                   i_todo_ok_B ,
-                   msgbasico ,0);--EL 0 es que cumpruebe reglas
-
-  --Hay errores fin
-   IF i_todo_ok_B=1 then
-    msgsalida:=msgbasico;
-       rollback;
-       return;
-   END IF;
-
-END IF;
-
---Comprobacion de vacaciones       BOMBEROS
-IF (V_ID_TIPO_PERMISO='01000'  AND  V_ID_TIPO_FUNCIONARIO = 23)          THEN
-     Chequeo_VACACIONES_BOMBEROS(v_id_ano ,
-                   v_id_funcionario,
-                   v_id_tipo_funcionario,
-                   v_id_tipo_permiso,
-                   v_id_tipo_dias_ent ,
-                   v_fecha_inicio ,
-                   v_fecha_fin ,
-                   v_num_dias ,V_GUARDIAS,
-                   i_todo_ok_B ,
-                   msgbasico ,1);--EL 0 es que cumpruebe reglas
-
-  --Hay errores fin
-   IF i_todo_ok_B=1 then
-    msgsalida:=msgbasico;
-       rollback;
-       return;
-   END IF;
-
-END IF;
-
-
---Chequeo si es un compensatorio por horas
-IF V_ID_TIPO_PERMISO='40000' THEN
-
-  chequeo_bolsa_concilia(v_id_ano,
-                        v_id_funcionario,
-                        v_fecha_inicio,
-                        v_fecha_fin,
-                        v_hora_inicio,
-                        v_hora_fin,
-                        v_total_horas,
-                        i_todo_ok_B ,
-                        msgbasico);
-
-   --Hay errores fin
-    IF i_todo_ok_B=1 then
-          msgsalida:=msgbasico;
-           rollback;
-         return;
-    END IF;
-END IF;
-
-
-
---Chequeo si es un compensatorio por horas
-IF V_ID_TIPO_PERMISO='15000' THEN
-
-  chequeo_compensatorio(v_id_ano,
-                        v_id_funcionario,
-                        v_fecha_inicio,
-                        v_fecha_fin,
-                        v_hora_inicio,
-                        v_hora_fin,
-                        v_total_horas,
-                        i_todo_ok_B ,
-                        msgbasico);
-
-   --Hay errores fin
-    IF i_todo_ok_B=1 then
-          msgsalida:=msgbasico;
-           rollback;
-         return;
-    END IF;
-END IF;
-
---Actualizo para permisos que son UNICOS
-IF V_UNICO='SI' AND V_ID_TIPO_PERMISO<>'15000' THEN
-
-/*msgsalida:='Estoy haciendo tareas de Administracion. Hasta las 15:00 no se podran meter permisos. :) ' ||   v_id_tipo_dias_ent  || ' ' ||V_ID_TIPO_DIAS_PER ;
- return;
-   rollback;*/
-
-                                         --a馻dido 11 de junio 2020
-   -- 22 d韆s laborables de vacaciones aunque se soliciten por periodos naturales.
-
-    IF   V_ID_TIPO_PERMISO='01000'  AND  V_ID_TIPO_FUNCIONARIO <> 23 AND  V_ID_TIPO_FUNCIONARIO <> 21  THEN
-     i_num_dias_laborables := calcula_laborales_vaca(V_FECHA_INICIO,
-                                    V_FECHA_FIN,
-                                    V_ID_TIPO_DIAS_PER,
-                                    V_ID_FUNCIONARIO,
-                                    V_ID_ANO);
-                 /*   msgsalida:='Las vacaciones superan el limite de 22 d韆s laborables.' ||  i_num_dias_laborables;
-         rollback;
-         return;        */
-       IF i_num_dias_laborables > 22 then
-            msgsalida:='Las vacaciones superan el limite de 22 d韆s laborables.';
-         rollback;
-         return;
-       END IF;
-
-
-    END IF;
-
-     ACTUALIZAR_UNICO_NEW(V_ID_ANO ,
-        V_ID_FUNCIONARIO ,
-        V_ID_TIPO_FUNCIONARIO ,
-        V_ID_TIPO_PERMISO,
-        v_id_tipo_dias_ent ,
-        V_ID_TIPO_DIAS_PER ,
-        V_FECHA_INICIO ,
-        V_FECHA_FIN ,
-        V_NUM_DIAS , v_num_dias_tiene_per,
-        i_todo_ok_B ,
-                   msgbasico,0 ,i_num_dias_laborables);
-    --Hay errores fin
-    IF i_todo_ok_B=1 then
-     msgsalida:=msgbasico;
-         rollback;
-         return;
-    END IF;
-END IF;
-
-
-
---INSERTA PERMISO Y ENVIA CORREO
- inserta_permiso_new(v_id_ano ,
-                   v_id_funcionario ,
-                   v_id_tipo_funcionario ,
-                   v_id_tipo_permiso ,
-                   v_id_tipo_dias_ent ,
-                   v_fecha_inicio ,
-                   v_fecha_fin ,
-                   v_hora_inicio ,
-                   v_hora_fin ,
-                   v_unico ,
-                   v_dprovincia ,
-                   v_id_GRADO,
-                   v_justificacion2 ,
-                   v_num_dias ,
-                   v_total_horas,
-                      v_T1,
-                     v_T2 ,
-                     v_t3 ,V_GUARDIAS,
-                   i_todo_ok_B,
-                   msgbasico,v_enlace_fichero);
---Hay errores fin
-IF i_todo_ok_B=1 then
- msgsalida:=msgbasico;
-   rollback;
-   return;
-END IF;
-
-
-
- --El funcionario Ficha ??
-   --22 0ctubre 2006
-   --Modificado  lpad(to_char(p.id_funcionario),6,'0')=lpad(u.id_usuario,6,'0')
-   --Fecha 24/03/2010
-   i_ficha:=1;
-   BEGIN
-    SELECT
-        distinct codpers
-        into i_codpers
-    FROM
-        personal_new p  ,presenci pr,  apliweb_usuario  u
-    WHERE
-
-        p.id_funcionario=V_ID_FUNCIONARIO  and
-         lpad(to_char(p.id_funcionario),6,'0')=lpad(u.id_funcionario,6,'0') and
-        u.id_fichaje is not null and
-        u.id_fichaje=pr.codpers and
-        codinci<>999 and rownum <2;
-   EXCEPTION
-          WHEN NO_DATA_FOUND THEN
-           i_ficha:=0;
-   END;
-   v_codpers:=i_codpers;
-
-
-COMMIT;
-msgsalida:='La solicitud de permiso ha sido enviada para su firma.';
-todook:='0';
-END PERMISOS_new;
+      i_ficha := 0;
+  END;
+  
+  v_codpers := i_codpers;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 13: FINALIZACI脫N EXITOSA
+  --------------------------------------------------------------------------------
+  
+  COMMIT;
+  msgsalida := 'La solicitud de permiso ha sido enviada para su firma.';
+  todook := C_OK;
+  
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Manejo robusto de excepciones no controladas
+    todook := C_ERROR;
+    msgsalida := 'Error inesperado al crear permiso: ' || SQLERRM || 
+                 ' | Funcionario: ' || V_ID_FUNCIONARIO ||
+                 ' | Tipo permiso: ' || V_ID_TIPO_PERMISO;
+    ROLLBACK;
+    
+END PERMISOS_NEW;
 /
 

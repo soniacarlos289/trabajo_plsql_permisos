@@ -1,52 +1,438 @@
-CREATE OR REPLACE PROCEDURE RRHH."PERMISOS_ANULA_USUARIO"
-       (    V_ID_PERMISO in number,
-            V_ID_FUNCIONARIO in varchar2,
-            todo_ok_Basico out integer,
-            msgBasico out varchar2
+--------------------------------------------------------------------------------
+-- PROCEDURE: PERMISOS_ANULA_USUARIO
+--------------------------------------------------------------------------------
+-- Prop贸sito: Anular permiso solicitado por el usuario antes de su inicio
+-- Autor: RRHH / Optimizado por Carlos (04/12/2025)
+-- Versi贸n: 2.0.0
+--
+-- Descripci贸n:
+--   Permite al usuario anular su solicitud de permiso siempre que:
+--   - El permiso a煤n no haya comenzado (fecha inicio > fecha actual)
+--   - El permiso no sea de tipo baja por enfermedad (11100, 11300)
+--   - El usuario sea el propietario de la solicitud
+--
+-- Estados de permiso:
+--   10 - Solicitado
+--   20 - Pendiente Firma Jefe Secci贸n
+--   21 - Pendiente Firma Jefe 脕rea
+--   22 - Pendiente Visto Bueno RRHH
+--   30 - Rechazado Jefe Secci贸n
+--   31 - Rechazado Jefe 脕rea
+--   32 - Denegado RRHH
+--   40 - Anulado RRHH
+--   41 - Anulado por USUARIO (a帽adido 03/03/2017)
+--   80 - Concedido RRHH
+--
+-- Par谩metros:
+--   V_ID_PERMISO      - ID del permiso a anular
+--   V_ID_FUNCIONARIO  - ID del funcionario que solicita la anulaci贸n
+--   todo_ok_Basico    - 0=OK, 1=Error (OUT)
+--   msgBasico         - Mensaje resultado (OUT)
+--
+-- Historial:
+--   04/12/2025 - Carlos - Optimizaci贸n v2.0
+--   01/04/2017 - CHM - Validaci贸n tipo funcionario
+--   03/03/2017 - CHM - A帽adido estado 41 (Anulado por usuario)
+--------------------------------------------------------------------------------
 
-            ) is
+CREATE OR REPLACE PROCEDURE RRHH.PERMISOS_ANULA_USUARIO(
+  V_ID_PERMISO     IN NUMBER,
+  V_ID_FUNCIONARIO IN VARCHAR2,
+  todo_ok_Basico   OUT INTEGER,
+  msgBasico        OUT VARCHAR2
+) IS
+  
+  --------------------------------------------------------------------------------
+  -- CONSTANTES
+  --------------------------------------------------------------------------------
+  C_OK CONSTANT INTEGER := 0;
+  C_ERROR CONSTANT INTEGER := 1;
+  
+  -- Estados de permiso
+  C_ESTADO_PENDIENTE_JS CONSTANT NUMBER := 20;
+  C_ESTADO_PENDIENTE_JA CONSTANT NUMBER := 21;
+  C_ESTADO_PENDIENTE_RRHH CONSTANT NUMBER := 22;
+  C_ESTADO_CONCEDIDO CONSTANT NUMBER := 80;
+  C_ESTADO_RECHAZADO_JS CONSTANT NUMBER := 30;
+  C_ESTADO_RECHAZADO_JA CONSTANT NUMBER := 31;
+  C_ESTADO_DENEGADO_RRHH CONSTANT NUMBER := 32;
+  C_ESTADO_ANULADO_RRHH CONSTANT NUMBER := 40;
+  C_ESTADO_ANULADO_USUARIO CONSTANT NUMBER := 41;
+  
+  -- Tipos de permiso especiales
+  C_PERMISO_BAJA_ENFERMEDAD_1 CONSTANT VARCHAR2(5) := '11100';
+  C_PERMISO_BAJA_ENFERMEDAD_2 CONSTANT VARCHAR2(5) := '11300';
+  C_PERMISO_COMPENSATORIO CONSTANT VARCHAR2(5) := '15000';
+  
+  -- C贸digos incidencia
+  C_CODINCI_EXCLUIR CONSTANT NUMBER := 999;
+  
+  --------------------------------------------------------------------------------
+  -- VARIABLES LOCALES (OPTIMIZADAS)
+  --------------------------------------------------------------------------------
+  
+  -- Datos del permiso
+  I_id_permiso NUMBER;
+  I_id_ano NUMBER(4);
+  I_id_funcionario NUMBER(6);
+  I_id_tipo_permiso VARCHAR2(5);
+  I_id_estado_permiso NUMBER(2);
+  I_fecha_inicio DATE;
+  I_fecha_fin DATE;
+  I_hora_inicio VARCHAR2(5);
+  I_hora_fin VARCHAR2(5);
+  I_id_tipo_dias VARCHAR2(1);
+  I_ID_GRADO VARCHAR2(50);
+  i_num_dias NUMBER(5, 2);
+  i_justificacion VARCHAR2(2);
+  i_observaciones VARCHAR2(1500);
+  
+  -- Turnos (bomberos)
+  i_t1 VARCHAR2(1);
+  i_t2 VARCHAR2(1);
+  i_t3 VARCHAR2(1);
+  
+  -- Control
+  i_permiso_no_encontrado NUMBER(1) := 0;
+  i_ficha NUMBER(1) := 0;
+  i_codpers VARCHAR2(5);
+  i_tipo_funcionario NUMBER(2);
+  i_id_js NUMBER;
+  fecha_hoy DATE;
+  
+  -- Correos y mensajes
+  correo_v_funcionario VARCHAR2(100);
+  i_nombre_peticion VARCHAR2(200);
+  correo_js VARCHAR2(100);
+  i_sender VARCHAR2(100);
+  i_recipient VARCHAR2(100);
+  I_ccrecipient VARCHAR2(100);
+  i_subject VARCHAR2(200);
+  I_message VARCHAR2(4000);
+  i_mensaje VARCHAR2(4000);
+  i_DESC_TIPO_PERMISO VARCHAR2(200);
+  i_CADENA2 VARCHAR2(500);
 
-I_id_permiso number;
-I_id_ano number(4);
-I_id_funcionario number(6);
-I_id_tipo_permiso number(5);
-I_id_estado_permiso number(2);
-I_fecha_inicio date;
-I_fecha_fin date;
-I_hora_inicio varchar2(5);
-I_hora_fin   varchar2(5);
-i_permiso_no_encontrado number;
-i_cambia_estado number;
-i_ficha number;
-i_codpers number;
-i_justificacion varchar2(2);
-i_observaciones varchar2(1500);
-v_dni  varchar2(10);
-fecha_hoy date;
-
-  correo_v_funcionario varchar2(512);
-  i_nombre_peticion    varchar2(512);
-  correo_js            varchar2(512);
-  correo_ja            varchar2(512);
-  i_sender             varchar2(256);
-  i_recipient          varchar2(256);
-  I_ccrecipient        varchar2(256);
-  i_subject            varchar2(256);
-  I_message            varchar2(15120);
-  i_dias               number(4);
-  i_desc_mensaje       varchar2(15120);
-  i_contador           number;
-  i_mensaje            varchar2(25000);
-  i_ID_GRADO           varchar2(300);
-  i_num_dias           number;
-  i_t1                 varchar2(5);
-  i_t2                 varchar2(5);
-  i_t3                 varchar2(5);
-   I_id_tipo_dias           varchar2(5);
-   i_DESC_TIPO_PERMISO    varchar2(15120);
-   i_CADENA2              varchar2(15120);
-   i_id_js number;
-   i_tipo_funcionario number;
+BEGIN
+  
+  --------------------------------------------------------------------------------
+  -- FASE 1: INICIALIZACI脫N
+  --------------------------------------------------------------------------------
+  
+  todo_ok_basico := C_OK;
+  msgBasico := '';
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: OBTENER DATOS DEL PERMISO
+  --------------------------------------------------------------------------------
+  
+  BEGIN
+    SELECT p.id_permiso,
+           p.id_ano,
+           p.id_funcionario,
+           p.id_tipo_permiso,
+           p.id_estado,
+           p.fecha_inicio,
+           p.fecha_fin,
+           p.hora_inicio,
+           p.hora_fin,
+           p.justificacion,
+           DECODE(p.observaciones, NULL, '0', p.observaciones) AS observaciones,
+           p.ID_GRADO,
+           p.id_tipo_dias,
+           tr.DES_TIPO_PERMISO_LARGA,
+           DECODE(p.id_tipo_permiso,
+                  C_PERMISO_COMPENSATORIO,
+                  'Fecha Inicio: ' || TO_CHAR(p.FECHA_INICIO, 'DD-MON-YY') ||
+                  CHR(10) || 'Hora de Inicio: ' || p.HORA_INICIO || CHR(10) ||
+                  'Hora Fin: ' || p.HORA_FIN,
+                  'Fecha Inicio: ' || TO_CHAR(p.FECHA_INICIO, 'DD-MON-YY') ||
+                  CHR(10) || 'Fecha Fin: ' || TO_CHAR(p.FECHA_FIN, 'DD-MON-YY') || 
+                  CHR(10) || 'Numero de Dias: ' || p.NUM_DIAS) AS cadena,
+           p.NUM_DIAS,
+           p.tu1_14_22,
+           p.tu2_22_06,
+           p.tu3_04_14,
+           p.firmado_js
+      INTO I_id_permiso,
+           I_id_ano,
+           I_id_funcionario,
+           I_id_tipo_permiso,
+           I_id_estado_permiso,
+           I_fecha_inicio,
+           I_fecha_fin,
+           I_hora_inicio,
+           I_hora_fin,
+           i_justificacion,
+           i_observaciones,
+           I_ID_GRADO,
+           I_id_tipo_dias,
+           i_DESC_TIPO_PERMISO,
+           i_CADENA2,
+           i_num_dias,
+           i_t1,
+           i_t2,
+           i_t3,
+           i_id_js
+      FROM permiso p
+      JOIN tr_tipo_permiso tr 
+        ON tr.id_ano = p.id_ano 
+       AND tr.id_tipo_permiso = p.id_tipo_permiso
+     WHERE p.id_permiso = v_id_permiso;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_permiso_no_encontrado := 1;
+  END;
+  
+  -- Validar si el permiso existe
+  IF i_permiso_no_encontrado <> 0 THEN
+    todo_ok_basico := C_ERROR;
+    msgBasico := 'Operaci贸n no realizada. Permiso no encontrado: ' || V_ID_PERMISO;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: VALIDACIONES DE SEGURIDAD
+  --------------------------------------------------------------------------------
+  
+  -- Validaci贸n 1: El usuario debe ser el propietario del permiso
+  IF V_ID_FUNCIONARIO <> I_id_funcionario THEN
+    todo_ok_basico := C_ERROR;
+    msgBasico := 'Operaci贸n no realizada. Avisar a RRHH.';
+    RETURN;
+  END IF;
+  
+  -- Validaci贸n 2: No se pueden anular permisos de baja
+  IF I_id_tipo_permiso IN (C_PERMISO_BAJA_ENFERMEDAD_1, C_PERMISO_BAJA_ENFERMEDAD_2) THEN
+    msgBasico := 'No se puede anular permisos de Bajas. Solamente por RRHH.';
+    todo_ok_basico := C_ERROR;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: OBTENER TIPO DE FUNCIONARIO
+  -- Actualizaci贸n: 01/04/2017 - CHM
+  --------------------------------------------------------------------------------
+  
+  i_tipo_funcionario := 10; -- Valor por defecto
+  
+  BEGIN
+    SELECT tipo_funcionario2
+      INTO i_tipo_funcionario
+      FROM personal_new
+     WHERE id_funcionario = I_id_funcionario
+       AND ROWNUM < 2;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_tipo_funcionario := -1;
+  END;
+  
+  IF i_tipo_funcionario = -1 THEN
+    todo_ok_basico := C_ERROR;
+    msgBasico := 'Operaci贸n no realizada. TIPO FUNCIONARIO NO ENCONTRADO.';
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 5: VALIDACI脫N DE FECHAS
+  -- El permiso solo se puede anular si a煤n no ha comenzado
+  --------------------------------------------------------------------------------
+  
+  SELECT TO_DATE(TO_CHAR(SYSDATE, 'DD/MM/YYYY'), 'DD/MM/YYYY') 
+    INTO fecha_hoy 
+    FROM DUAL;
+  
+  IF fecha_hoy >= I_FECHA_INICIO THEN
+    msgBasico := 'Para anular, la Fecha de Inicio del permiso tiene que ser mayor que la fecha actual.';
+    todo_ok_basico := C_ERROR;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 6: ANULACI脫N DEL PERMISO
+  -- Solo si est谩 en estados: Pendiente (20, 21, 22) o Concedido (80)
+  --------------------------------------------------------------------------------
+  
+  IF I_ID_ESTADO_PERMISO IN (C_ESTADO_PENDIENTE_JS, 
+                              C_ESTADO_PENDIENTE_JA, 
+                              C_ESTADO_PENDIENTE_RRHH, 
+                              C_ESTADO_CONCEDIDO) THEN
+    
+    -- Denegar el permiso (revertir cambios en contadores)
+    permiso_denegado(
+      v_id_permiso,
+      todo_ok_basico,
+      msgBasico
+    );
+    
+    IF todo_ok_basico = C_ERROR THEN
+      msgBasico := 'Operaci贸n no realizada. PERMISO DENEGADO.';
+      ROLLBACK;
+      RETURN;
+    END IF;
+    
+    -- Actualizar estado del permiso a "Anulado por Usuario"
+    UPDATE PERMISO
+       SET id_Estado = C_ESTADO_ANULADO_USUARIO,
+           observaciones = i_observaciones || ' Anulaci贸n por el usuario',
+           fecha_modi = SYSDATE
+     WHERE ID_PERMISO = V_ID_PERMISO
+       AND ROWNUM < 2;
+    
+    --------------------------------------------------------------------------------
+    -- FASE 7: ACTUALIZAR SISTEMA DE FICHAJE (SI APLICA)
+    --------------------------------------------------------------------------------
+    
+    -- Verificar si el funcionario tiene fichaje activo
+    i_ficha := 1;
+    BEGIN
+      SELECT DISTINCT codpers
+        INTO i_codpers
+        FROM personal_new p
+        JOIN apliweb_usuario u 
+          ON LPAD(p.id_funcionario, 6, '0') = LPAD(u.id_funcionario, 6, '0')
+        JOIN presenci pr 
+          ON u.id_fichaje = pr.codpers
+       WHERE p.id_funcionario = I_ID_FUNCIONARIO
+         AND u.id_fichaje IS NOT NULL
+         AND pr.codinci <> C_CODINCI_EXCLUIR
+         AND ROWNUM < 2;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_ficha := 0;
+    END;
+    
+    -- Actualizar fichaje seg煤n tipo de permiso
+    IF I_FICHA = 1 AND I_ID_TIPO_PERMISO <> C_PERMISO_COMPENSATORIO THEN
+      -- Actualizar finger para permisos generales
+      actualiza_finger(
+        i_id_ano,
+        i_id_funcionario,
+        i_id_tipo_permiso,
+        i_fecha_inicio,
+        i_fecha_fin,
+        i_codpers,
+        C_ESTADO_ANULADO_USUARIO, -- Nuevo estado
+        todo_ok_basico,
+        msgBasico
+      );
+      
+      IF todo_ok_basico = C_ERROR THEN
+        ROLLBACK;
+        RETURN;
+      END IF;
+      
+    ELSIF I_FICHA = 1 AND I_ID_TIPO_PERMISO = C_PERMISO_COMPENSATORIO AND
+          I_ID_ESTADO_PERMISO IN (C_ESTADO_ANULADO_RRHH, C_ESTADO_DENEGADO_RRHH, C_ESTADO_ANULADO_USUARIO) THEN
+      -- Anular fichaje compensatorio en transacciones y persfich
+      ANULA_FICHAJE_FINGER_15000(
+        i_id_ano,
+        i_id_funcionario,
+        i_fecha_inicio,
+        i_hora_inicio,
+        i_hora_fin,
+        i_codpers,
+        0,
+        C_PERMISO_COMPENSATORIO,
+        todo_ok_basico,
+        msgBasico
+      );
+      
+      IF todo_ok_basico = C_ERROR THEN
+        ROLLBACK;
+        RETURN;
+      END IF;
+    END IF;
+    
+    --------------------------------------------------------------------------------
+    -- FASE 8: ENVIAR NOTIFICACIONES POR CORREO
+    --------------------------------------------------------------------------------
+    
+    -- Obtener correos del funcionario y jefe de secci贸n
+    BEGIN
+      SELECT MIN(peticion), 
+             MIN(nombre_peticion), 
+             MIN(js)
+        INTO correo_v_funcionario, 
+             i_nombre_peticion, 
+             correo_js
+        FROM (SELECT login || '@aytosalamanca.es' AS peticion,
+                     SUBSTR(DIST_NAME, INSTR(DIST_NAME, '=', 1) + 1, 
+                            INSTR(DIST_NAME, ',', 1) - INSTR(DIST_NAME, '=', 1) - 1) AS nombre_peticion,
+                     '' AS js
+                FROM apliweb_usuario
+               WHERE id_funcionario = TO_CHAR(I_ID_FUNCIONARIO)
+              UNION
+              SELECT '' AS peticion,
+                     '' AS nombre_peticion,
+                     login || '@aytosalamanca.es' AS js
+                FROM apliweb_usuario
+               WHERE LPAD(id_funcionario, 6, '0') = LPAD(i_id_js, 6, '0'));
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_id_js := '';
+    END;
+    
+    -- Preparar correo
+    i_sender := correo_v_funcionario;
+    I_ccrecipient := '';
+    i_recipient := correo_v_funcionario;
+    
+    -- Generar mensaje de anulaci贸n
+    -- Actualizaci贸n: 01/04/2017 - CHM
+    envia_correo_informa_new(
+      '0',
+      i_ID_TIPO_PERMISO,
+      i_nombre_peticion,
+      i_DESC_TIPO_PERMISO,
+      'Anulaci贸n por el Usuario',
+      i_fecha_inicio,
+      i_fecha_fin,
+      i_hora_inicio,
+      i_hora_fin,
+      i_id_grado,
+      i_id_tipo_dias,
+      i_num_dias,
+      i_t1,
+      i_t2,
+      i_t3,
+      i_TIPO_FUNCIONARIO,
+      i_mensaje
+    );
+    
+    I_message := i_mensaje;
+    i_subject := 'Anulaci贸n de Permiso por USUARIO.';
+    
+    -- Enviar correo al jefe de secci贸n
+    envio_correo(
+      i_sender,
+      correo_js,
+      I_ccrecipient,
+      i_subject,
+      I_message
+    );
+    
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 9: FINALIZACI脫N EXITOSA
+  --------------------------------------------------------------------------------
+  
+  msgBasico := 'Permiso anulado correctamente.';
+  todo_ok_basico := C_OK;
+  COMMIT;
+  
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Manejo robusto de excepciones no controladas
+    todo_ok_basico := C_ERROR;
+    msgBasico := 'Error inesperado al anular permiso: ' || SQLERRM ||
+                 ' | Permiso: ' || V_ID_PERMISO ||
+                 ' | Funcionario: ' || V_ID_FUNCIONARIO;
+    ROLLBACK;
+    
+END PERMISOS_ANULA_USUARIO;
+/
 
 begin
 todo_ok_basico:=0;
@@ -59,7 +445,7 @@ msgBasico:='';
 -- 30 Rechazado Jefe Secc.
 -- 31 Rechazado Jefe Area.
 -- 32 Denegado RRHH
--- 41 Anulado por USUARIO //a馻dido 03/03/2017
+-- 41 Anulado por USUARIO //a锟絘dido 03/03/2017
 -- 40 Anulado RRHH
 -- 80 Concedido  RRHH
 
@@ -188,7 +574,7 @@ IF ( I_ID_ESTADO_PERMISO=20 OR I_ID_ESTADO_PERMISO=21 OR I_ID_ESTADO_PERMISO=22 
    --ANULADO POR USUARIO
    UPDATE PERMISO
    SET  id_Estado='41',
-        observaciones=i_observaciones || 'Anulaci髇 por el usuario'     ,
+        observaciones=i_observaciones || 'Anulaci锟絥 por el usuario'     ,
         fecha_modi=sysdate
    WHERE   ID_PERMISO=V_ID_PERMISO and rownum<2;
 
@@ -269,7 +655,7 @@ IF ( I_ID_ESTADO_PERMISO=20 OR I_ID_ESTADO_PERMISO=21 OR I_ID_ESTADO_PERMISO=22 
           END;
 
 
-          --ENVIO DE CORREO AL JEFE FUNCIONARIO CON LA ANULACI髇
+          --ENVIO DE CORREO AL JEFE FUNCIONARIO CON LA ANULACI锟絥
            i_sender      := correo_v_funcionario;
            I_ccrecipient := '';
           i_recipient   := correo_v_funcionario;
@@ -279,7 +665,7 @@ IF ( I_ID_ESTADO_PERMISO=20 OR I_ID_ESTADO_PERMISO=21 OR I_ID_ESTADO_PERMISO=22 
          envia_correo_informa_new('0',  i_ID_TIPO_PERMISO,
                        i_nombre_peticion,
                        i_DESC_TIPo_PERMISO,
-                        'Anulaci髇 por el Usuario',--motivo
+                        'Anulaci锟絥 por el Usuario',--motivo
                        i_fecha_inicio ,
                        i_fecha_fin ,
                        i_hora_inicio ,
@@ -296,7 +682,7 @@ IF ( I_ID_ESTADO_PERMISO=20 OR I_ID_ESTADO_PERMISO=21 OR I_ID_ESTADO_PERMISO=22 
         I_message := i_mensaje;
 
         --chm 03/04/2017
-        i_subject := 'Anulaci髇 de Permiso por USUARIO.';
+        i_subject := 'Anulaci锟絥 de Permiso por USUARIO.';
         envio_correo(i_sender,
                      correo_js,
                      I_ccrecipient,
