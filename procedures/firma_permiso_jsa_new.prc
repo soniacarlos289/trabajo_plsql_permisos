@@ -1,62 +1,156 @@
-CREATE OR REPLACE PROCEDURE RRHH."FIRMA_PERMISO_JSA_NEW" (V_ID_FIRMA             in varchar2,
-                                                V_ID_FUNCIONARIO_FIRMA in number,
-                                                V_ID_PERMISO           in number,
-                                                V_ID_MOTIVO            in VARCHAR2,
-                                                todo_ok_Basico         out integer,
-                                                msgBasico              out varchar2) is
+--------------------------------------------------------------------------------
+-- PROCEDURE: FIRMA_PERMISO_JSA_NEW
+--------------------------------------------------------------------------------
+-- Propósito: Procesar firma de permiso por Jefe de Sección (JS) o Jefe de Área (JA)
+-- Autor: RRHH / Optimizado por Carlos (04/12/2025)
+-- Versión: 2.0.0
+--
+-- Descripción:
+--   Gestiona las firmas de autorización o denegación de permisos por parte
+--   de los responsables jerárquicos (JS/JA).
+--
+--   Funcionalidades principales:
+--   - Validación de permisos existentes y estado correcto
+--   - Verificación de jerarquía de firmas (titular/delegados)
+--   - Lógica especial para BOMBEROS (jefe de guardia actual)
+--   - Soporte para múltiples delegados (4 niveles)
+--   - Delegación activa solo cuando titular está de permiso (modo 0)
+--   - Delegación permanente (modo 1) para ciertos colectivos
+--   - Actualización de estado según nivel jerárquico
+--   - Notificaciones por correo electrónico
+--   - Auditoría en histórico de operaciones
+--
+-- Estados gestionados:
+--   20 - Pendiente Firma JS → 22 (Pde RRHH) o 21 (Pde JA bomberos)
+--   21 - Pendiente Firma JA → 22 (Pde RRHH)
+--   30 - Rechazado JS
+--   31 - Rechazado JA
+--
+-- Parámetros:
+--   V_ID_FIRMA             - 1=Autorizar, 0=Denegar (IN)
+--   V_ID_FUNCIONARIO_FIRMA - ID del jefe que firma (IN)
+--   V_ID_PERMISO           - ID del permiso a firmar (IN)
+--   V_ID_MOTIVO            - Motivo si deniega (IN)
+--   todo_ok_Basico         - 0=OK, 1=Error (OUT)
+--   msgBasico              - Mensaje resultado (OUT)
+--
+-- Historial:
+--   04/12/2025 - Carlos - Optimización v2.0
+--   01/06/2022 - CHM - Ajuste validación bomberos
+--   10/05/2018 - CHM - IDs específicos JA bomberos (961110, 600077)
+--   10/02/2017 - CHM - Añadida lógica bomberos
+--   31/05/2016 - CHM - Modo delegación permanente (id_delegado_firma=1)
+--   05/04/2010 - CHM - Función chequeo_entra_delegado
+--------------------------------------------------------------------------------
 
-  i_no_hay_permisos number;
-  i_no_hay_firma    number;
-  i_id_funcionario  varchar2(6);
-  i_firma           varchar2(256);
-  i_id_estado       varchar2(2);
+CREATE OR REPLACE PROCEDURE RRHH.FIRMA_PERMISO_JSA_NEW (
+  V_ID_FIRMA             IN VARCHAR2,
+  V_ID_FUNCIONARIO_FIRMA IN NUMBER,
+  V_ID_PERMISO           IN NUMBER,
+  V_ID_MOTIVO            IN VARCHAR2,
+  todo_ok_Basico         OUT INTEGER,
+  msgBasico              OUT VARCHAR2
+) IS
 
-  i_id_js             varchar2(6);
-  i_id_delegado_js    varchar2(6);
-    i_id_delegado_js2    varchar2(6);
-      i_id_delegado_js3    varchar2(6);
-        i_id_delegado_js4    varchar2(6);
-  i_id_ja             varchar2(6);
-  i_id_delegado_ja    varchar2(6);
-  i_id_delegado_firma  varchar2(6);
-  i_DESC_TIPO_PERMISO varchar2(512);
-  i_CADENA2           varchar2(512);
+  --------------------------------------------------------------------------------
+  -- CONSTANTES
+  --------------------------------------------------------------------------------
+  C_OK CONSTANT INTEGER := 0;
+  C_ERROR CONSTANT INTEGER := 1;
+  
+  -- Estados
+  C_ESTADO_PENDIENTE_JS CONSTANT NUMBER := 20;
+  C_ESTADO_PENDIENTE_JA CONSTANT NUMBER := 21;
+  C_ESTADO_PENDIENTE_RRHH CONSTANT NUMBER := 22;
+  C_ESTADO_RECHAZADO_JS CONSTANT NUMBER := 30;
+  C_ESTADO_RECHAZADO_JA CONSTANT NUMBER := 31;
+  
+  -- Tipos especiales
+  C_TIPO_FUNC_BOMBERO CONSTANT VARCHAR2(2) := '23';
+  C_PERMISO_COMPENSATORIO CONSTANT VARCHAR2(5) := '15000';
+  C_EMAIL_DOMAIN CONSTANT VARCHAR2(20) := '@aytosalamanca.es';
+  
+  -- IDs específicos bomberos
+  C_ID_JA_BOMBEROS_1 CONSTANT VARCHAR2(6) := '961110'; -- Luis Damián Ramos
+  C_ID_JA_BOMBEROS_2 CONSTANT VARCHAR2(6) := '600077'; -- Antonio Fiz
+  C_EMAIL_JA_BOMBEROS_1 CONSTANT VARCHAR2(50) := 'ldramos@aytosalamanca.es';
+  C_EMAIL_JA_BOMBEROS_2 CONSTANT VARCHAR2(50) := 'afiz@aytosalamanca.es';
+  
+  -- Modos de delegación
+  C_DELEGACION_PERMISO CONSTANT NUMBER := 0; -- Solo cuando titular está de permiso
+  C_DELEGACION_PERMANENTE CONSTANT NUMBER := 1; -- Siempre puede firmar
+  
+  --------------------------------------------------------------------------------
+  -- VARIABLES LOCALES
+  --------------------------------------------------------------------------------
+  
+  -- Control de existencia
+  i_no_hay_permisos NUMBER;
+  i_no_hay_firma NUMBER;
+  i_contador NUMBER;
+  
+  -- Datos del permiso
+  i_id_funcionario VARCHAR2(6);
+  i_id_estado VARCHAR2(2);
+  i_id_ano NUMBER(4);
+  i_dias NUMBER(4);
+  v_id_tipo_permiso VARCHAR2(5);
+  v_id_tipo_dias VARCHAR2(1);
+  v_num_dias NUMBER;
+  v_fecha_inicio DATE;
+  v_fecha_fin DATE;
+  V_HORA_INICIO VARCHAR2(5);
+  V_HORA_FIN VARCHAR2(5);
+  V_ID_GRADO VARCHAR2(300);
+  v_tipo_funcionario VARCHAR2(10);
+  v_t1 VARCHAR2(5);
+  v_t2 VARCHAR2(5);
+  v_t3 VARCHAR2(5);
+  
+  -- Jerarquía de firmas
+  i_id_js VARCHAR2(6);
+  i_id_delegado_js VARCHAR2(6);
+  i_id_delegado_js2 VARCHAR2(6);
+  i_id_delegado_js3 VARCHAR2(6);
+  i_id_delegado_js4 VARCHAR2(6);
+  i_id_ja VARCHAR2(6);
+  i_id_delegado_ja VARCHAR2(6);
+  i_id_delegado_firma VARCHAR2(6);
+  
+  -- Correos y mensajes
+  correo_v_funcionario VARCHAR2(100);
+  i_nombre_peticion VARCHAR2(200);
+  correo_js VARCHAR2(100);
+  correo_ja VARCHAR2(100);
+  i_sender VARCHAR2(100);
+  i_recipient VARCHAR2(100);
+  I_ccrecipient VARCHAR2(100);
+  i_subject VARCHAR2(200);
+  I_message VARCHAR2(4000);
+  v_mensaje VARCHAR2(4000);
+  
+  -- Descriptivos
+  i_DESC_TIPO_PERMISO VARCHAR2(200);
+  i_CADENA2 VARCHAR2(500);
+  i_firma VARCHAR2(200);
 
-  correo_v_funcionario varchar2(512);
-  i_nombre_peticion    varchar2(512);
-  correo_js            varchar2(512);
-  correo_ja            varchar2(512);
-  i_sender             varchar2(256);
-  i_recipient          varchar2(256);
-  I_ccrecipient        varchar2(256);
-  i_subject            varchar2(256);
-  I_message            varchar2(15120);
-  i_id_ano             number(4);
-  i_dias               number(4);
-  i_desc_mensaje       varchar2(15120);
-  v_id_tipo_permiso    varchar2(5);
-  v_id_tipo_dias       varchar2(1);
-  v_num_dias           number;
-  v_fecha_inicio       date;
-  v_fecha_fin          date;
-  V_HORA_INICIO        varchar2(5);
-  V_HORA_FIN           varchar2(5);
-  i_contador           number;
-  v_mensaje            varchar2(25000);
-  V_ID_GRADO           varchar2(300);
-  v_tipo_funcionario    varchar2(10);
-  v_t1                 varchar2(5);
-  v_t2                 varchar2(5);
-  v_t3                 varchar2(5);
-begin
+BEGIN
+  
+  --------------------------------------------------------------------------------
+  -- FASE 1: INICIALIZACIÓN
+  --------------------------------------------------------------------------------
+  
+  todo_ok_basico := C_OK;
+  msgBasico := '';
 
-  todo_ok_basico := 0;
-  msgBasico      := '';
-
-  --Compruebo que el permiso esta en la tabla
+  --------------------------------------------------------------------------------
+  -- FASE 2: VALIDAR EXISTENCIA Y ESTADO DEL PERMISO
+  --------------------------------------------------------------------------------
+  
   i_no_hay_permisos := 0;
+  
   BEGIN
-    select HORA_INICIO,
+    SELECT HORA_INICIO,
            HORA_FIN,
            ID_GRADO,
            p.FECHA_INICIO,
@@ -70,77 +164,85 @@ begin
            DES_TIPO_PERMISO_LARGA,
            DECODE(p.id_tipo_permiso,
                   '15000',
-                  'Fecha Inicio: ' || to_char(p.FECHA_INICIO, 'DD-MON-YY') ||
-                  chr(10) || 'Hora de Inicio: ' || HORA_INICIO || chr(10) ||
+                  'Fecha Inicio: ' || TO_CHAR(p.FECHA_INICIO, 'DD-MON-YY') ||
+                  CHR(10) || 'Hora de Inicio: ' || HORA_INICIO || CHR(10) ||
                   'Hora Fin: ' || HORA_FIN,
-                  'Fecha Inicio: ' || to_char(p.FECHA_INICIO, 'DD-MON-YY') ||
-                  chr(10) || 'Fecha Fin:    ' ||
-                  to_char(p.FECHA_FIN, 'DD-MON-YY') || chr(10) ||
+                  'Fecha Inicio: ' || TO_CHAR(p.FECHA_INICIO, 'DD-MON-YY') ||
+                  CHR(10) || 'Fecha Fin:    ' ||
+                  TO_CHAR(p.FECHA_FIN, 'DD-MON-YY') || CHR(10) ||
                   'Numero de Dias: ' || p.NUM_DIAS),
            p.NUM_DIAS,
            tu1_14_22,
            tu2_22_06,
            tu3_04_14
-      into V_HORA_INICIO,
-           V_HORA_FIN,
-           V_ID_GRADO,
-           v_fecha_inicio,
-           v_fecha_fin,
-           V_num_DIAs,
-           v_id_tipo_dias,
-           v_id_tipo_permiso,
-           i_id_ano,
-           i_id_estado,
-           i_id_funcionario,
-           i_DESC_TIPO_PERMISO,
-           i_CADENA2,
-           i_dias,v_t1,v_t2,v_t3
-      from permiso p, tr_tipo_permiso tr
-     where id_permiso = v_id_permiso
-       and tr.id_ano = p.id_ano
-       and --A?adido el a?o
-           p.id_tipo_permiso = tr.id_tipo_permiso
-       and (anulado = 'NO' OR ANULADO IS NULL);
+    INTO V_HORA_INICIO,
+         V_HORA_FIN,
+         V_ID_GRADO,
+         v_fecha_inicio,
+         v_fecha_fin,
+         V_num_DIAs,
+         v_id_tipo_dias,
+         v_id_tipo_permiso,
+         i_id_ano,
+         i_id_estado,
+         i_id_funcionario,
+         i_DESC_TIPO_PERMISO,
+         i_CADENA2,
+         i_dias,
+         v_t1,
+         v_t2,
+         v_t3
+    FROM permiso p, tr_tipo_permiso tr
+    WHERE id_permiso = v_id_permiso
+      AND tr.id_ano = p.id_ano
+      AND p.id_tipo_permiso = tr.id_tipo_permiso
+      AND (anulado = 'NO' OR ANULADO IS NULL);
+      
   EXCEPTION
     WHEN NO_DATA_FOUND THEN
       i_no_hay_permisos := -1;
   END;
-
-  IF i_no_hay_permisos = -1 then
-    todo_ok_basico := 1;
-    msgBasico      := 'Operacion no realizada.Permiso no existe.';
+  
+  IF i_no_hay_permisos = -1 THEN
+    todo_ok_basico := C_ERROR;
+    msgBasico := 'Operacion no realizada. Permiso no existe.';
     RETURN;
   END IF;
-
- --chm 10/02/2017
- --Compruebo el tipo de funcionario de la solicitud
- v_tipo_funcionario:=10;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: OBTENER TIPO DE FUNCIONARIO
+  --------------------------------------------------------------------------------
+  
+  v_tipo_funcionario := '10';
+  
   BEGIN
-    select tipo_funcionario2
-      into v_tipo_funcionario
-      from personal_new pe
-     where id_funcionario = i_id_funcionario  and rownum<2;
+    SELECT tipo_funcionario2
+    INTO v_tipo_funcionario
+    FROM personal_new
+    WHERE id_funcionario = i_id_funcionario
+      AND ROWNUM < 2;
+      
   EXCEPTION
     WHEN NO_DATA_FOUND THEN
-      v_tipo_funcionario:=-1;
+      v_tipo_funcionario := '-1';
   END;
-
-  IF v_tipo_funcionario = -1 then
-    todo_ok_basico := 1;
-    msgBasico      := 'Operacion no realizada. TIPO FUNCIONARIO NO ENCONTRADO.';
+  
+  IF v_tipo_funcionario = '-1' THEN
+    todo_ok_basico := C_ERROR;
+    msgBasico := 'Operacion no realizada. TIPO FUNCIONARIO NO ENCONTRADO.';
     RETURN;
   END IF;
-
-
--- CHM 10/02/2017
--- NO ES bombero
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: BÚSQUEDA Y VALIDACIÓN DE JERARQUÍA DE FIRMAS
+  --------------------------------------------------------------------------------
 IF v_tipo_funcionario <> '23' then
 
   --Busco que la persona que firma sea la correcta
   BEGIN
     select id_js, id_delegado_js, id_ja, id_delegado_ja ,id_delegado_firma, id_delegado_js2,id_delegado_js3,id_delegado_js4
       into i_id_js, i_id_delegado_js, i_id_ja, i_id_delegado_ja
-           ,i_id_delegado_firma --a�adido 31 mayo 2016. Para poder firmar 2
+           ,i_id_delegado_firma --a�adido 31 mayo 2016. Para poder firmar 2
            ,i_id_delegado_js2,i_id_delegado_js3,i_id_delegado_js4
       from funcionario_firma
      where id_funcionario = i_id_funcionario
@@ -155,7 +257,7 @@ IF v_tipo_funcionario <> '23' then
     WHEN NO_DATA_FOUND THEN
       i_no_hay_firma := -1;
   END;
-  ----a�adido 31 mayo 2016. Para poder firmar cualquiera de los 2. Por ahora solo policias.
+  ----a�adido 31 mayo 2016. Para poder firmar cualquiera de los 2. Por ahora solo policias.
   ------ID_DELEGADO_FIRMA---------------------------------------
   ------ 0 Permite firma al delegado cuando el titular no esta
   ------ 1 Permite firmar siempre
@@ -170,7 +272,7 @@ IF v_tipo_funcionario <> '23' then
   --a?adido el 5 de Abril 2010. Funcion nueva /*delegado
   i_contador:= chequeo_entra_delegado(i_id_delegado_js);
 
-    IF i_contador = 0 and i_id_delegado_firma= 0 then ----a�adido 31 mayo 2016. Para poder firmar cualquiera de los  2
+    IF i_contador = 0 and i_id_delegado_firma= 0 then ----a�adido 31 mayo 2016. Para poder firmar cualquiera de los  2
       todo_ok_basico := 1;
       msgBasico      := 'Operacion no realizada. La delegacion de permisos solo es efectiva cuando el responable esta de Permiso.';
       RETURN;
@@ -222,9 +324,9 @@ IF v_tipo_funcionario <> '23' then
   END IF;
 
 ELSE
-  --a�adido chm 25/02/2017
+  --a�adido chm 25/02/2017
   --BUSQUEDA FIRMA BOMBEROS
-  --a�adir la funci�n
+  --a�adir la funci�n
   i_id_ja:='0';
   i_id_js:='0';
   correo_js:='';
@@ -296,7 +398,7 @@ ELSE
   END IF;
 end if;
 
---nombre petici�n y correo
+--nombre petici�n y correo
 --chm 12/02/2017
 BEGIN
 select  MIN(correo_funcionario) ,MIN(nombre_peticion)
@@ -399,11 +501,11 @@ IF ((i_id_estado = 20 AND V_ID_FUNCIONARIO_FIRMA = I_ID_JS) OR
                        v_mensaje);
 
        I_message:= v_mensaje;
-    i_firma := 'Operacion realizada. El permiso esta pendiente del V�B� de RRHH.';
+    i_firma := 'Operacion realizada. El permiso esta pendiente del V�B� de RRHH.';
       --chm 10/02/2017
-      --Envio correo al ja, para el 2� nivel.
+      --Envio correo al ja, para el 2� nivel.
     if (i_id_estado = 21 and v_tipo_funcionario = '23') then
-   i_firma := 'Operacion realizada. El permiso esta pendiente del V�B� Jefe de Bomberos.';
+   i_firma := 'Operacion realizada. El permiso esta pendiente del V�B� Jefe de Bomberos.';
         envio_correo(i_sender ,
                i_recipient ,
                I_ccrecipient ,
