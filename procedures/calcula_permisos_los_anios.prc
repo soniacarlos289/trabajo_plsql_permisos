@@ -1,412 +1,415 @@
-create or replace procedure rrhh.CALCULA_PERMISOS_LOS_ANIOS
- (V_ID_FUNCIONARIO in number,V_ID_ANO in varchar)  is 
+--------------------------------------------------------------------------------
+-- PROCEDURE: CALCULA_PERMISOS_LOS_ANIOS
+--------------------------------------------------------------------------------
+-- Propósito: Calcular y asignar permisos anuales a funcionarios
+-- Autor: RRHH / Optimizado por Carlos (04/12/2025)
+-- Versión: 2.0.0
+--
+-- Descripción:
+--   Calcula automáticamente los permisos que corresponden a cada funcionario
+--   para un año específico basándose en:
+--   - Antigüedad del funcionario
+--   - Tipo de funcionario (bomberos, policías, administrativos)
+--   - Tipo de contratación (funcionario, laboral)
+--   - Días proporcionales si es alta/baja durante el año
+--   - Trienios acumulados
+--
+--   Funcionalidades principales:
+--   - Cálculo de vacaciones (01000) con días adicionales por antigüedad
+--   - Asuntos propios (02000) según colectivo
+--   - Días adicionales por antigüedad (01015)
+--   - Asuntos propios por trienios (02015)
+--   - Permisos compensatorios (03010-03060) arrastre año anterior
+--   - Ajuste proporcional para altas/bajas en el año
+--   - Casos especiales para funcionarios históricos (IDs específicos)
+--
+-- Reglas de cálculo:
+--   Vacaciones base: 30 días laborables (bomberos/policías: naturales)
+--   Antigüedad > 15 años: +1 a +4 días extra según tramo
+--   Factor proporcional: días desde ingreso / 365
+--   Bomberos (tipo 23) y Policías (tipo 21): días naturales
+--
+-- Parámetros:
+--   V_ID_FUNCIONARIO - ID funcionario (0=todos) (IN)
+--   V_ID_ANO         - Año cálculo (0=actual) (IN)
+--
+-- Historial:
+--   04/12/2025 - Carlos - Optimización v2.0
+--   [Múltiples fechas] - CHM - Casos especiales funcionarios históricos
+--   [Original] - RRHH - Creación inicial
+--------------------------------------------------------------------------------
 
-  -- Local variables here
-  i integer;
-  i_id_funcionario varchar2(6);
-  i_id_ano number(4);
-  i_compensatorios number;
-  i_asuntos_propios_bomberos number;
-  i_asuntos_propios number;
-  i_num_dias_extras number; 
-  i_fecha_ingreso date;
-  i_antiguedad number;
-  i_dias_factor number;
-  i_contratacion number;
-  i_tipo_funcionario2 number;
-  id_tipo_funcionario_p number;
-  i_id_tipo_permiso varchar2(5);
-  i_num_dias number;
-  i_unico varchar2(2);
-  i_tipo_dias varchar2(1);
-  i_inserta number;
+CREATE OR REPLACE PROCEDURE RRHH.CALCULA_PERMISOS_LOS_ANIOS (
+  V_ID_FUNCIONARIO IN NUMBER,
+  V_ID_ANO         IN VARCHAR
+) IS
+
+  --------------------------------------------------------------------------------
+  -- CONSTANTES
+  --------------------------------------------------------------------------------
+  C_DIAS_VACACIONES_BASE CONSTANT NUMBER := 30;
+  C_DIAS_MAX_FACTOR CONSTANT NUMBER := 365;
+  C_ANTIGUEDAD_MAXIMA CONSTANT NUMBER := 55;
+  C_ANTIGUEDAD_COMPLETA CONSTANT NUMBER := 5;
   
+  -- Tipos de funcionario
+  C_TIPO_ADMINISTRATIVO CONSTANT NUMBER := 10;
+  C_TIPO_POLICIA CONSTANT NUMBER := 21;
+  C_TIPO_BOMBERO CONSTANT NUMBER := 23;
   
-  --Obtengo los permisos.
-  cursor c1  (i_ano number,i_funcionario number) is
-     select 
-         distinct id_funcionario,fecha_ingreso,
-                --  nvl(to_char(fecha_baja,'yyyy'),'0')-to_char(fecha_ingreso,'yyyy') as Antiguedad,
-                  nvl(to_char(fecha_baja,'yyyy'),'0')-to_char(fecha_antiguedad,'yyyy') as Antiguedad,
-                  NVL(FECHA_FIN_CONTRATO,to_date('31/12/' || i_ano ,'DD/MM/YYYY'))-fecha_ingreso as dias_factor,
-                  contratacion,tipo_funcionario2
-     from personal_new pe 
-     where 
-         (fecha_baja is null or fecha_baja > to_date('31/12/' || i_ano ,'DD/MM/YYYY')
-              and fecha_baja <= to_date('31/12/2090' ,'DD/MM/YYYY'))  and 
-         (fecha_fin_contrato>  to_date('01/12/' || i_ano ,'DD/MM/YYYY') or fecha_fin_contrato is null)                  
-              and ('0'=i_funcionario OR pe.id_funcionario=i_funcionario)       
-     order by id_funcionario;              
+  -- Tipos de permiso principales
+  C_PERMISO_VACACIONES CONSTANT VARCHAR2(5) := '01000';
+  C_PERMISO_ASUNTOS_PROPIOS CONSTANT VARCHAR2(5) := '02000';
+  C_PERMISO_DIAS_ANTIGUEDAD CONSTANT VARCHAR2(5) := '01015';
+  C_PERMISO_TRIENIOS CONSTANT VARCHAR2(5) := '02015';
+  
+  -- IDs funcionarios históricos con reglas especiales
+  TYPE t_ids_especiales IS TABLE OF NUMBER INDEX BY PLS_INTEGER;
+  v_ids_1991 t_ids_especiales; -- Fecha antigüedad 01/02/1991
+  v_ids_1985 t_ids_especiales; -- Fecha antigüedad 01/02/1985
+  
+  --------------------------------------------------------------------------------
+  -- VARIABLES LOCALES
+  --------------------------------------------------------------------------------
+  i INTEGER;
+  i_id_funcionario VARCHAR2(6);
+  i_id_ano NUMBER(4);
+  i_compensatorios NUMBER;
+  i_asuntos_propios_bomberos NUMBER;
+  i_asuntos_propios NUMBER;
+  i_num_dias_extras NUMBER;
+  i_fecha_ingreso DATE;
+  i_antiguedad NUMBER;
+  i_dias_factor NUMBER;
+  i_contratacion NUMBER;
+  i_tipo_funcionario2 NUMBER;
+  id_tipo_funcionario_p NUMBER;
+  i_id_tipo_permiso VARCHAR2(5);
+  i_num_dias NUMBER;
+  i_unico VARCHAR2(2);
+  i_tipo_dias VARCHAR2(1);
+  i_inserta NUMBER;
+  
+  --------------------------------------------------------------------------------
+  -- CURSORES
+  --------------------------------------------------------------------------------
+  
+  -- Cursor para obtener funcionarios activos en el año
+  CURSOR c1 (i_ano NUMBER, i_funcionario NUMBER) IS
+    SELECT DISTINCT 
+           id_funcionario,
+           fecha_ingreso,
+           NVL(TO_CHAR(fecha_baja, 'yyyy'), '0') - TO_CHAR(fecha_antiguedad, 'yyyy') AS Antiguedad,
+           NVL(FECHA_FIN_CONTRATO, TO_DATE('31/12/' || i_ano, 'DD/MM/YYYY')) - fecha_ingreso AS dias_factor,
+           contratacion,
+           tipo_funcionario2
+    FROM personal_new pe
+    WHERE (fecha_baja IS NULL 
+           OR (fecha_baja > TO_DATE('31/12/' || i_ano, 'DD/MM/YYYY')
+               AND fecha_baja <= TO_DATE('31/12/2090', 'DD/MM/YYYY')))
+      AND (fecha_fin_contrato > TO_DATE('01/12/' || i_ano, 'DD/MM/YYYY') 
+           OR fecha_fin_contrato IS NULL)
+      AND ('0' = i_funcionario OR pe.id_funcionario = i_funcionario)
+    ORDER BY id_funcionario;
+  
+  -- Cursor para tipos de permiso del año
+  CURSOR c2 (i_ano NUMBER) IS
+    SELECT LPAD(ID_TIPO_PERMISO, 5, '0'),
+           NUM_DIAS,
+           UNICO,
+           tipo_dias,
+           id_tipo_funcionario
+    FROM tr_tipo_permiso
+    WHERE id_ano = v_id_ano
+      AND id_tipo_permiso NOT IN ('01501', '01502', '01503', '01504', '03060', '03070', '03080')
+    ORDER BY id_tipo_permiso;
 
---RECORREMOS TODOS LOS PERMISOS DE UN A�O   
-Cursor c2 (i_ano number) is
-         select    lpad(ID_TIPO_PERMISO,5,'0'), NUM_DIAS , UNICO,tipo_dias,id_tipo_funcionario                     
-                 from tr_tipo_permiso              
-                 where  id_ano=v_id_ano 
-                    and id_tipo_permiso not in('01501','01502','01503','01504','03060','03070','03080') --Permisos que no se tienen que calcular.
-          /*  AND (        (
-              id_tipo_permiso in ('03010','03020','03030','03040','03050')--,'03040','03050','03060')
-              and FECHA_INICIO+120 > sysdate    )  OR  ( fecha_inicio=
-               to_date('01/01/' || i_ano ,'DD/MM/YYYY')) )*/
-               ORDER BY id_tipo_permiso;
-                       
-       
-begin
-  -- Test statements here
-  dbms_OUTPUT.PUT_LINE('Empieza el PL/SQL');
-
-  IF V_ID_ANO = '0' then
-    i_id_ano:=to_char(sysdate,'YYYY');
-  Else
-  --A�o calculo permisos  
-     i_id_ano:=to_number(V_ID_ANO);
+BEGIN
+  
+  --------------------------------------------------------------------------------
+  -- FASE 1: INICIALIZACIÓN
+  --------------------------------------------------------------------------------
+  
+  DBMS_OUTPUT.PUT_LINE('Empieza el PL/SQL');
+  
+  -- Determinar año de cálculo
+  IF V_ID_ANO = '0' THEN
+    i_id_ano := TO_CHAR(SYSDATE, 'YYYY');
+  ELSE
+    i_id_ano := TO_NUMBER(V_ID_ANO);
   END IF;
-    
-     
-   OPEN C1(i_id_ano,V_ID_FUNCIONARIO); 
-   LOOP
   
-      FETCH C1 INTO                  
-            i_id_funcionario,i_fecha_ingreso, i_antiguedad,i_dias_factor,i_contratacion,i_tipo_funcionario2;
-      EXIT WHEN C1%NOTFOUND;  
-         
+  -- Inicializar IDs funcionarios especiales (antigüedad 01/02/1991)
+  v_ids_1991(1) := 10002;
+  v_ids_1991(2) := 10003;
+  v_ids_1991(3) := 10024;
+  v_ids_1991(4) := 10011;
+  v_ids_1991(5) := 10013;
+  v_ids_1991(6) := 10016;
+  v_ids_1991(7) := 10020;
+  v_ids_1991(8) := 10029;
+  v_ids_1991(9) := 10021;
+  v_ids_1991(10) := 10023;
+  v_ids_1991(11) := 10028;
+  v_ids_1991(12) := 10030;
+  
+  -- Inicializar IDs antigüedad 01/02/1985
+  v_ids_1985(1) := 14003;
+  v_ids_1985(2) := 14004;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: RECORRER FUNCIONARIOS Y CALCULAR PERMISOS
+  --------------------------------------------------------------------------------
+  
+  OPEN C1(i_id_ano, V_ID_FUNCIONARIO);
+  LOOP
+    
+    FETCH C1 INTO i_id_funcionario,
+                  i_fecha_ingreso,
+                  i_antiguedad,
+                  i_dias_factor,
+                  i_contratacion,
+                  i_tipo_funcionario2;
+    EXIT WHEN C1%NOTFOUND;
+    
+    -- Calcular factor proporcional (días trabajados / 365)
+    i_dias_factor := i_dias_factor / C_DIAS_MAX_FACTOR;
+    
+    -- Ajustes de antigüedad
+    IF i_antiguedad > C_ANTIGUEDAD_MAXIMA THEN
+      i_antiguedad := 0;
+    END IF;
+    
+    IF i_antiguedad > C_ANTIGUEDAD_COMPLETA THEN
+      i_dias_factor := 1;
+    END IF;
+    
+    IF i_dias_factor > 1 THEN
+      i_dias_factor := 1;
+    END IF;
+    
+    --------------------------------------------------------------------------------
+    -- FASE 3: PROCESAR CADA TIPO DE PERMISO
+    --------------------------------------------------------------------------------
+    
+    OPEN C2(i_id_ano);
+    LOOP
       
-        --Factor muliplicaci�n para los d�as de vacaciones.      
-        i_dias_factor:=i_dias_factor/365;
-       
-        IF i_antiguedad > 55 then
-               i_antiguedad:=0;
-        end if;
+      FETCH C2 INTO i_id_tipo_permiso,
+                    i_num_dias,
+                    i_unico,
+                    i_tipo_dias,
+                    id_tipo_funcionario_p;
+      EXIT WHEN C2%NOTFOUND;
       
-        IF i_antiguedad > 5 then
-                i_dias_factor:=1;
-        end if;
+      i_inserta := 1; -- Por defecto no insertar
+      
+      -- VACACIONES Y ASUNTOS PROPIOS (proporcionales)
+      IF i_id_tipo_permiso = C_PERMISO_VACACIONES OR i_id_tipo_permiso = C_PERMISO_ASUNTOS_PROPIOS THEN
         
-        IF i_dias_factor > 1 then
-                i_dias_factor:=1;
-         end if;
-   
-      OPEN C2(i_id_ano); 
-      LOOP
-  
-           FETCH C2 INTO                  
-            i_id_tipo_permiso,i_num_dias, i_unico,i_tipo_dias,  id_tipo_funcionario_p;
-           EXIT WHEN C2%NOTFOUND;  
-           
-           i_inserta:=1;--no
-           
-           --VAcaciones y AP.
-           IF  i_id_tipo_permiso = '01000' OR  i_id_tipo_permiso = '02000' then    
-                IF   i_id_tipo_permiso = '01000' and  i_dias_factor<> 1 then
-                    i_num_dias:=30;
-                END IF;     
-               i_num_dias:=round(i_num_dias*  i_dias_factor,0);
-               i_inserta:=1;--no    
-               
-               IF i_TIPO_FUNCIONARIO2=21 OR i_TIPO_FUNCIONARIO2=23 THEN
-                  i_tipo_dias:='N';--dias naturales para bomberos y policias. 
-               END IF;       
-               
-           else if   i_id_tipo_permiso = '03010' OR  i_id_tipo_permiso = '03020' 
-                  OR i_id_tipo_permiso = '03030' OR  i_id_tipo_permiso = '03040'
-                  OR i_id_tipo_permiso = '03050' OR  i_id_tipo_permiso = '03060'   then
-                    /* compensatorios*/
-                    Begin 
-                     select count(*) into i_inserta
-                     from permiso_funcionario t
-                     where id_funcionario=i_id_funcionario AND 
-                     ID_TIPO_PERMISO in ('03010','03020','03030','03040','03050','03060') and
-                     id_ano=v_id_ano-1;
-                    EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                       i_inserta:=0;
-                    WHEN OTHERS THEN
-                       i_inserta:=0;
-                    end; 
-                    IF i_TIPO_FUNCIONARIO2=10 THEN
-                        i_inserta:=1;--si  
-                    END IF;
-                    if i_inserta> 0 then
-                        i_inserta:=1;--si  
-                    end if;
-                      
-                end if;  
-           end if;     
-           
-           IF i_id_tipo_permiso = '01015' then    
-           
-              BEGIN
-               i_inserta:=1; 
-               select distinct
-                DECODE(i_id_ano-to_number(substr(to_char(fecha_antiguedad,'DD/MM/YYYY'),7,4)),
-                       16,1,
-                       17,1,
-                       18,1,
-                       19,1,
-                       20,1,
-                       21,2,
-                       22,2,
-                       23,2,
-                       24,2,
-                       25,2,
-                       26,3,
-                       27,3,
-                       28,3,
-                       29,3,
-                       30,3,
-                       31,4,
-                       32,4,
-                       33,4,
-                       34,4,
-                       35,4,
-                       36,4,
-                       37,4,
-                       38,4,
-                       39,4,
-                       40,4,
-                       41,4,
-                       42,4,
-                       43,4,
-                       44,4,
-                       45,4,
-                       46,4,
-                       47,4,
-                       48,4,
-                       49,4,
-                       50,4,
-                       51,4,
-                       52,4,
-                       53,4,
-                       54,4,
-                       55,4,
-                       56,4,
-                       57,4,
-                       58,4,
-                       59,4,
-                       60,4,
-                       61,4,
-                       62,4,
-                       63,4,
-                       64,4,
-                       65,4,
-                       66,4,
-                       67,4,
-                       68,4,
-                       69,4,
-                       70,4,
-                          0) into i_num_dias
-                      from personal_new 
-                      where 
-                        i_id_ano-to_number(substr(to_char(fecha_antiguedad,'DD/MM/YYYY'),7,4)) > 15
-                      and id_funcionario=i_id_funcionario; 
-                    EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                     i_inserta:=0;
-                    WHEN OTHERS THEN
-                     i_inserta:=0;
-                    end;
-                    
-                    /* 203353  tiene que tener 13/02/1991 --> trienios*/
- 
-                    --caMBIAR FECHA DE ANTIGUEDAD 1/02/1985
-                    -- 14003
-                    -- 14004 
-
-
-                    --falta dias extras vacaciones
-                    --caMBIAR FECHA DE ANTIGUEDAD 1/02/1991
-                    -- 2--->solamente 
-                    /*
-                    10002 Jose Andres Julian Blanco
-                    10024 Fernando Paulino Iglesias
-                    10003 Enrique Lucas Aparicio
-                    10011 Blanca M? Ballina Fernandez
-                    10013 Jose Luis Berrocal Delgado
-                    10016 Yolanda Felipe Montero
-                    10020 Clementina Garcia de Onis Montero
-                    10021 Esperanza Gomez Sanchez
-                    10023 Carmen Pastor Sanchez
-                    10029 Amable Rodriguez Gonzalez
-                    10030 Jenaro San Cipriano Gonzalez
-                    10028 Aniceto Rodriguez Encinas
-                     */
-
-    
-                     --Para los de fecha de antiguedad /01/02/1991 
-                      IF i_id_funcionario =10002    OR
-                         i_id_funcionario =10003    OR
-                         i_id_funcionario =10024    OR
-                         i_id_funcionario =10011    OR
-                         i_id_funcionario =10013    OR
-                         i_id_funcionario =10016    OR
-                         i_id_funcionario =10020    OR
-                         i_id_funcionario =10029    OR
-                         i_id_funcionario =10021    OR
-                         i_id_funcionario =10023    OR
-                         i_id_funcionario =10028    OR
-                         i_id_funcionario =10030  Then
-
-                                 i_num_dias:=2;
-                                   i_inserta:=1; 
-                      END IF;
-                      IF i_id_funcionario = (203353) then
-                                i_num_dias:=3;
-                                  i_inserta:=1; 
-                     END IF;  
-      
-                     --Para los de fecha de antiguedad /01/02/1985
-                     IF i_id_funcionario = 14003 OR i_id_funcionario = 14004 THEN 
-                                  i_num_dias:=4;
-                                    i_inserta:=1; 
-                     END IF;
-                                         
-           end if; --PERMISO 01015
-           
-           if i_id_tipo_permiso='02015' then
-               i_inserta:=1; 
-             --falta dias extras vacaciones
-             -- 3--->solamente
-              /*
-              10002 Jose Andres Julian Blanco
-              10024 Fernando Paulino Iglesias
-              10003 Enrique Lucas Aparicio
-              10011 Blanca M? Ballina Fernandez
-              10013 Jose Luis Berrocal Delgado
-              10016 Yolanda Felipe Montero
-              10020 Clementina Garcia de Onis Montero
-              10021 Esperanza Gomez Sanchez
-              10023 Carmen Pastor Sanchez
-              10029 Amable Rodriguez Gonzalez
-              10030 Jenaro San Cipriano Gonzalez
-              10028 Aniceto Rodriguez Encinas
-              */
-              /* 203353  tiene que tener 13/02/1991 --> trienios*/
-     --Asuntos propios por trienios
-                 Begin 
-              /*   SELECT  distinct  DECODE(trunc((i_id_ano-to_number(substr(to_char(ftrienio,'DD/mm/yyyy'),7,11)))/3) ,
-                6,2,7,2,trunc((i_id_ano-to_number(substr(to_char(ftrienio,'DD/mm/yyyy'),7,11)))/3)-5) as num_dias
-                into i_num_dias
-                
-                   from personal_vmaa p, (select max(versempl)as versempl,codiempl from personal_vmaa where  fechbaja is null group by codiempl )pe where 
-                  pe.codiempl=p.codiempl and  pe.versempl=p.versempl and pe.codiempl=i_id_funcionario and
-                   trunc((i_id_ano-to_number(substr(to_char(ftrienio,'DD/mm/yyyy'),7,11)))/3) > 5 --and fechbaja is null
-                   ; */ 
-                   SELECT  distinct 0     into i_num_dias from dual;       
-                 EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                     i_inserta:=0;
-                    WHEN OTHERS THEN
-                     i_inserta:=0;
-                    end;
-                 IF --Para los de fecha de antiguedad /01/02/1991 
-                       i_id_funcionario =10002    OR
-                         i_id_funcionario =10003    OR
-                         i_id_funcionario =10024    OR
-                         i_id_funcionario =10011    OR
-                         i_id_funcionario =10013    OR
-                         i_id_funcionario =10016    OR
-                         i_id_funcionario =10020    OR
-                         i_id_funcionario =10029    OR
-                         i_id_funcionario =10021    OR
-                         i_id_funcionario =10023    OR
-                         i_id_funcionario =10028    OR
-                         i_id_funcionario =10030  THEN 
-                                 i_num_dias:=3;
-                                   i_inserta:=1; 
-                      END IF;
-                      IF i_id_funcionario = (203353) then
-                                i_num_dias:=3;
-                                  i_inserta:=1; 
-                     END IF;  
-      
-                     --Para los de fecha de antiguedad /01/02/1985
-                  IF i_id_funcionario = 14003 OR i_id_funcionario = 14004 THEN 
-                                  i_num_dias:=2;
-                                    i_inserta:=1; 
-                     END IF;
-           END IF;   
- 
-            
-           if (i_id_tipo_permiso  = '02030' OR i_id_tipo_permiso  = '02031' ) AND  i_TIPO_FUNCIONARIO2<>23 THEN
-              i_inserta := 0;
-           
-           END IF;
-             
-                                     
-           
-           If  i_inserta = 1 then
-              Begin 
-               insert into  permiso_funcionario
-                (id_funcionario, id_tipo_permiso, id_ano, num_dias, completo, unico, id_tipo_dias ) 
-               values
-                (i_id_funcionario, I_id_tipo_permiso, v_id_ano, i_num_dias, 'SI', i_unico, I_tipo_dias);
-              EXCEPTION
-                 WHEN DUP_VAL_ON_INDEX THEN
-                   i_inserta := 0;
-              END;  
-           END IF;     
-             
-      
-      
-      
-      
-      END LOOP;
-      CLOSE C2;
-      
- 
-
-    
-             
-     
- 
-    
-    
-        -- Compruebo que el a?o pasado tenia ap bomberos
-    /*   Begin 
-         select count(*) into  i_asuntos_propios_bomberos
-         from permiso_funcionario t
-         where id_funcionario=i_id_funcionario AND 
-               ID_TIPO_PERMISO  in ('02081','02082','02162','02241','02242') and
-               id_ano=i_id_ano-1;
-         EXCEPTION
-          WHEN NO_DATA_FOUND THEN
-             i_asuntos_propios_bomberos:=0;
-          WHEN OTHERS THEN
-               i_asuntos_propios_bomberos:=0;
-        end;
-                
-        IF     i_asuntos_propios_bomberos > 0 then                          
-            INSERT INTO PERMISO_FUNCIONARIO
-              (ID_FUNCIONARIO       ,  
-               ID_TIPO_PERMISO        ,
-               ID_ANO                 ,
-               NUM_DIAS               ,
-               COMPLETO               ,
-               UNICO                  ) 
-               (
-               select 
-                  i_id_funcionario,
-                   ID_TIPO_PERMISO       ,         
-                   ID_ANO,                          
-                      NUM_DIAS ,
-                    'SI'  ,
-                    UNICO                     
-                 from tr_tipo_permiso              
-                 where UNICO='SI' AND 
-                       ID_TIPO_PERMISO in ('02081') and
-                       id_ano=i_id_ano);                             
-             commit;                                              
+        IF i_id_tipo_permiso = C_PERMISO_VACACIONES AND i_dias_factor <> 1 THEN
+          i_num_dias := C_DIAS_VACACIONES_BASE;
         END IF;
-*/
-              
-  
-   commit;                        
-  END LOOP;
+        
+        i_num_dias := ROUND(i_num_dias * i_dias_factor, 0);
+        i_inserta := 1;
+        
+        -- Bomberos y policías: días naturales
+        IF i_TIPO_FUNCIONARIO2 = C_TIPO_POLICIA OR i_TIPO_FUNCIONARIO2 = C_TIPO_BOMBERO THEN
+          i_tipo_dias := 'N';
+        END IF;
+        
+      -- PERMISOS COMPENSATORIOS (arrastre año anterior)
+      ELSIF i_id_tipo_permiso IN ('03010', '03020', '03030', '03040', '03050', '03060') THEN
+        
+        BEGIN
+          SELECT COUNT(*)
+          INTO i_inserta
+          FROM permiso_funcionario
+          WHERE id_funcionario = i_id_funcionario
+            AND ID_TIPO_PERMISO IN ('03010', '03020', '03030', '03040', '03050', '03060')
+            AND id_ano = v_id_ano - 1;
+            
+        EXCEPTION
+          WHEN NO_DATA_FOUND THEN
+            i_inserta := 0;
+          WHEN OTHERS THEN
+            i_inserta := 0;
+        END;
+        
+        -- Administrativos siempre
+        IF i_TIPO_FUNCIONARIO2 = C_TIPO_ADMINISTRATIVO THEN
+          i_inserta := 1;
+        END IF;
+        
+        IF i_inserta > 0 THEN
+          i_inserta := 1;
+        END IF;
+        
+      END IF;
+      
+      --------------------------------------------------------------------------------
+      -- FASE 4: DÍAS ADICIONALES POR ANTIGÜEDAD (01015)
+      --------------------------------------------------------------------------------
+      
+      IF i_id_tipo_permiso = C_PERMISO_DIAS_ANTIGUEDAD THEN
+        
+        BEGIN
+          i_inserta := 1;
+          
+          -- Calcular días adicionales según años de antigüedad (16-70 años)
+          SELECT DISTINCT
+            DECODE(i_id_ano - TO_NUMBER(SUBSTR(TO_CHAR(fecha_antiguedad, 'DD/MM/YYYY'), 7, 4)),
+              16, 1, 17, 1, 18, 1, 19, 1, 20, 1,  -- 16-20 años: 1 día
+              21, 2, 22, 2, 23, 2, 24, 2, 25, 2,  -- 21-25 años: 2 días
+              26, 3, 27, 3, 28, 3, 29, 3, 30, 3,  -- 26-30 años: 3 días
+              31, 4, 32, 4, 33, 4, 34, 4, 35, 4,  -- 31-70 años: 4 días
+              36, 4, 37, 4, 38, 4, 39, 4, 40, 4,
+              41, 4, 42, 4, 43, 4, 44, 4, 45, 4,
+              46, 4, 47, 4, 48, 4, 49, 4, 50, 4,
+              51, 4, 52, 4, 53, 4, 54, 4, 55, 4,
+              56, 4, 57, 4, 58, 4, 59, 4, 60, 4,
+              61, 4, 62, 4, 63, 4, 64, 4, 65, 4,
+              66, 4, 67, 4, 68, 4, 69, 4, 70, 4,
+              0) -- Por defecto 0
+          INTO i_num_dias
+          FROM personal_new
+          WHERE i_id_ano - TO_NUMBER(SUBSTR(TO_CHAR(fecha_antiguedad, 'DD/MM/YYYY'), 7, 4)) > 15
+            AND id_funcionario = i_id_funcionario;
+            
+        EXCEPTION
+          WHEN NO_DATA_FOUND THEN
+            i_inserta := 0;
+          WHEN OTHERS THEN
+            i_inserta := 0;
+        END;
+        
+        -- Casos especiales: IDs con antigüedad 01/02/1991 → 2 días
+        FOR i IN 1..v_ids_1991.COUNT LOOP
+          IF i_id_funcionario = v_ids_1991(i) THEN
+            i_num_dias := 2;
+            i_inserta := 1;
+            EXIT;
+          END IF;
+        END LOOP;
+        
+        -- Caso especial: ID 203353 → 3 días (trienios especiales)
+        IF i_id_funcionario = 203353 THEN
+          i_num_dias := 3;
+          i_inserta := 1;
+        END IF;
+        
+        -- Casos especiales: IDs con antigüedad 01/02/1985 → 4 días
+        FOR i IN 1..v_ids_1985.COUNT LOOP
+          IF i_id_funcionario = v_ids_1985(i) THEN
+            i_num_dias := 4;
+            i_inserta := 1;
+            EXIT;
+          END IF;
+        END LOOP;
+        
+      END IF; -- FIN PERMISO 01015
+      
+      --------------------------------------------------------------------------------
+      -- FASE 5: ASUNTOS PROPIOS POR TRIENIOS (02015)
+      --------------------------------------------------------------------------------
+      
+      IF i_id_tipo_permiso = C_PERMISO_AP_TRIENIOS THEN
+        
+        i_inserta := 1;
+        
+        BEGIN
+          -- Cálculo de trienios deshabilitado (lógica comentada en original)
+          -- Se mantiene valor por defecto de 0
+          SELECT DISTINCT 0
+          INTO i_num_dias
+          FROM dual;
+          
+        EXCEPTION
+          WHEN NO_DATA_FOUND THEN
+            i_inserta := 0;
+          WHEN OTHERS THEN
+            i_inserta := 0;
+        END;
+        
+        -- Casos especiales con trienios: IDs con antigüedad 01/02/1991 → 3 días
+        FOR i IN 1..v_ids_1991.COUNT LOOP
+          IF i_id_funcionario = v_ids_1991(i) THEN
+            i_num_dias := 3;
+            i_inserta := 1;
+            EXIT;
+          END IF;
+        END LOOP;
+        
+        -- Caso especial: ID 203353 → 3 días (trienios especiales)
+        IF i_id_funcionario = 203353 THEN
+          i_num_dias := 3;
+          i_inserta := 1;
+        END IF;
+        
+        -- Casos especiales: IDs con antigüedad 01/02/1985 → 2 días trienios
+        FOR i IN 1..v_ids_1985.COUNT LOOP
+          IF i_id_funcionario = v_ids_1985(i) THEN
+            i_num_dias := 2;
+            i_inserta := 1;
+            EXIT;
+          END IF;
+        END LOOP;
+        
+      END IF; -- FIN PERMISO 02015
+      
+      -- Excluir permisos bomberos (02030, 02031) para no bomberos
+      IF (i_id_tipo_permiso = '02030' OR i_id_tipo_permiso = '02031') 
+         AND i_TIPO_FUNCIONARIO2 <> C_TIPO_BOMBERO THEN
+        i_inserta := 0;
+      END IF;
+      
+      --------------------------------------------------------------------------------
+      -- FASE 6: INSERTAR EN PERMISO_FUNCIONARIO
+      --------------------------------------------------------------------------------
+      
+      IF i_inserta = 1 THEN
+        BEGIN
+          INSERT INTO permiso_funcionario (
+            id_funcionario,
+            id_tipo_permiso,
+            id_ano,
+            num_dias,
+            completo,
+            unico,
+            id_tipo_dias
+          ) VALUES (
+            i_id_funcionario,
+            i_id_tipo_permiso,
+            v_id_ano,
+            i_num_dias,
+            'SI',
+            i_unico,
+            i_tipo_dias
+          );
+          
+        EXCEPTION
+          WHEN DUP_VAL_ON_INDEX THEN
+            NULL; -- Registro ya existe, ignorar
+        END;
+      END IF;
+      
+    END LOOP; -- Fin cursor C2 (tipos de permiso)
+    CLOSE C2;
+    
+  END LOOP; -- Fin cursor C1 (funcionarios)
   CLOSE C1;
   
-  dbms_OUTPUT.PUT_LINE('Temino el PL/SQL ');
+  COMMIT;
   
-
-end CALCULA_PERMISOS_LOS_ANIOS;
+  DBMS_OUTPUT.PUT_LINE('Finalizado calcula_permisos_los_anios exitosamente');
+  
+EXCEPTION
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('Error en calcula_permisos_los_anios: ' || SQLERRM);
+    ROLLBACK;
+    RAISE;
+    
+END calcula_permisos_los_anios;
 /
 
