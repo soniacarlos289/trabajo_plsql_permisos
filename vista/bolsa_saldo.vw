@@ -24,8 +24,9 @@
   NOTAS DE OPTIMIZACIÓN:
     - Eliminado DISTINCT innecesario - los registros ya son únicos por la agrupación
       implícita de la vista bolsa_saldo_periodo
-    - Se mantienen los outer joins (+) para compatibilidad con períodos sin movimientos
-    - El filtro bm.anulado(+)=0 excluye movimientos anulados del join
+    - Se mantienen los outer joins para compatibilidad con períodos sin movimientos
+    - El filtro NVL(bm.anulado, 0)=0 excluye movimientos anulados preservando el 
+      comportamiento original de (+) en sintaxis Oracle antigua
     - Se recomienda índice: CREATE INDEX idx_bolsa_mov_func ON bolsa_movimiento
       (id_funcionario, periodo, id_ano, anulado);
 
@@ -58,5 +59,5 @@ FROM
         ON b.id_funcionario = bm.id_funcionario
         AND b.periodo = bm.periodo
         AND b.id_ano = bm.id_ano
-        AND bm.anulado = 0;                    -- Solo movimientos no anulados
+        AND NVL(bm.anulado, 0) = 0;            -- Solo movimientos no anulados (preserva comportamiento original)
 
