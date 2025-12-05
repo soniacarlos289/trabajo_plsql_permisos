@@ -271,7 +271,7 @@ FROM (
         LEFT OUTER JOIN bolsa_movimiento bm 
             ON b.id_funcionario = bm.id_funcionario
             AND b.id_ano = bm.id_ano
-            AND (bm.anulado = 0 OR bm.anulado IS NULL)  -- Excluir movimientos anulados (preserva comportamiento original)
+            AND bm.anulado = 0                      -- Excluir movimientos anulados (en ON preserva semántica outer join)
     GROUP BY 
         b.id_ano, 
         bm.periodo, 
