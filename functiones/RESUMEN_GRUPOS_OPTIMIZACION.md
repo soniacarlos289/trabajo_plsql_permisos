@@ -110,31 +110,60 @@ Optimizar y documentar funciones PL/SQL del repositorio `trabajo_plsql_permisos`
 
 ---
 
-## 📈 Métricas Consolidadas (40 Funciones)
+### Grupo 5 - Funciones de Solapamiento, Estadísticas y LDAP ✅ COMPLETADO
+**Funciones:** 10  
+**Archivo:** `GRUPO5_OPTIMIZACION.md`  
+**Rango:** finger_jornada_solapa → horas_fichaes_policia_mes
+
+| Función | Optimización Principal |
+|---------|----------------------|
+| finger_jornada_solapa | Eliminación TO_DATE(TO_CHAR(SYSDATE)), TRUNC |
+| fn_getibandigits | Constantes ASCII, documentación algoritmo ISO 7064 |
+| funcionario_bajas | **Eliminación 7 variables no usadas**, INNER JOIN |
+| funcionario_vacaciones | INNER JOIN, constante estado 80 |
+| funcionario_vacaciones_deta_nu | **Eliminación 6 variables no usadas**, INNER JOIN |
+| funcionario_vacaciones_deta_to | **Eliminación 7 variables no usadas** |
+| get_aplicaciones | **⚠️ Alertas seguridad críticas**, eliminación código comentado |
+| get_users | **⚠️ Alertas seguridad críticas**, eliminación código comentado |
+| get_users_test | **⚠️ Alertas seguridad críticas**, eliminación código comentado |
+| horas_fichaes_policia_mes | Eliminación TO_DATE(TO_CHAR()), INNER JOIN |
+
+**Mejoras clave:**
+- ⚠️ **3 vulnerabilidades de seguridad críticas identificadas y documentadas**
+- Eliminación 24 variables no utilizadas
+- Eliminación ~180 líneas de código comentado
+- Eliminación 2 conversiones TO_DATE(TO_CHAR())
+- +9100% aumento en comentarios
+
+---
+
+## 📈 Métricas Consolidadas (50 Funciones)
 
 ### Impacto General
 
 | Aspecto | Antes | Después | Mejora |
 |---------|-------|---------|--------|
-| **Total líneas de código** | ~2,400 | ~4,350 | +81% (documentación) |
-| **Total comentarios** | ~100 | ~2,280 | +2180% |
-| **Variables no inicializadas** | 33 | 0 | **-100%** |
-| **Constantes mágicas** | ~185 | 0 | **-100%** |
-| **SELECT FROM DUAL** | 85 | 0 | **-100%** |
+| **Total líneas de código** | ~2,920 | ~5,730 | +96% (documentación) |
+| **Total comentarios** | ~110 | ~3,200 | +2809% |
+| **Variables no inicializadas** | 57 | 0 | **-100%** |
+| **Constantes mágicas** | ~220 | 0 | **-100%** |
+| **SELECT FROM DUAL** | 87 | 0 | **-100%** |
 | **Código inalcanzable** | 15 líneas | 0 | **-100%** |
-| **Código comentado** | ~200 líneas | 0 | **-100%** |
+| **Código comentado** | ~380 líneas | 0 | **-100%** |
 | **Cursores manuales** | 5 | 0 | **-100%** |
 | **Encoding corrupto** | 8 archivos | 0 | **-100%** |
+| **⚠️ Vulnerabilidades críticas** | 3 no documentadas | 3 documentadas | **Alertas añadidas** |
 
 ### Distribución de Mejoras
 
 ```
-Grupo 1 (Cálculo/Parseo):     ~550 → ~600 líneas    (+9% doc)
-Grupo 2 (Validación):          ~650 → ~900 líneas    (+38% doc)
-Grupo 3 (Utilidad):            ~580 → ~1,100 líneas  (+90% doc)
-Grupo 4 (Períodos/Extracción): ~590 → ~1,250 líneas  (+112% doc)
-──────────────────────────────────────────────────────────────
-Total 4 Grupos:                ~2,400 → ~4,350 líneas (+81%)
+Grupo 1 (Cálculo/Parseo):            ~550 → ~600 líneas    (+9% doc)
+Grupo 2 (Validación):                ~650 → ~900 líneas    (+38% doc)
+Grupo 3 (Utilidad):                  ~580 → ~1,100 líneas  (+90% doc)
+Grupo 4 (Períodos/Extracción):       ~590 → ~1,250 líneas  (+112% doc)
+Grupo 5 (Solapamiento/LDAP):         ~520 → ~1,380 líneas  (+165% doc)
+──────────────────────────────────────────────────────────────────────
+Total 5 Grupos:                     ~2,920 → ~5,730 líneas (+96%)
 ```
 
 ---
@@ -317,22 +346,24 @@ con documentación completa
 
 ### Grupos Pendientes
 1. ✅ **Grupo 4:** devuelve_parametro_fecha → fecha_hoy_entre_dos (**COMPLETADO**)
-2. ⏳ **Grupo 5:** finger_jornada_solapa → funcionario_vacaciones_deta_to
-3. ⏳ **Grupo 6:** get_aplicaciones → horas_trajadas_mes
+2. ✅ **Grupo 5:** finger_jornada_solapa → horas_fichaes_policia_mes (**COMPLETADO**)
+3. ⏳ **Grupo 6:** horas_min_entre_dos_fechas → horas_trajadas_mes
 4. ⏳ **Grupo 7:** laboral_dia → permiso_en_dia
 5. ⏳ **Grupo 8:** personas_sinrpt → turno_policia
 6. ⏳ **Grupo 9:** turnos_fichaes_policia_mes → wbs_* (primera parte)
 7. ⏳ **Grupo 10:** wbs_* (segunda parte - continuación)
 
 ### Mejoras Recomendadas
-1. ⏳ Crear suite de pruebas unitarias para funciones optimizadas
-2. ⏳ Implementar tabla `config_casos_especiales` para IDs hardcodeados
-3. ⏳ Migrar años hardcodeados a rango dinámico
-4. ⏳ Separar generación HTML de lógica de negocio
-5. ⏳ Crear package de funciones auxiliares comunes
-6. ⏳ Migrar LDAP a LDAPS (conexion_lpad.fnc)
-7. ⏳ Crear índices recomendados en tablas de calendario
-8. ⏳ Considerar migración UTF-8 para caracteres especiales
+1. ⚠️ **CRÍTICO: Migrar credenciales LDAP a Oracle Wallet o tabla cifrada**
+2. ⚠️ **CRÍTICO: Migrar LDAP a LDAPS (puerto 636 con SSL/TLS)**
+3. ⚠️ **URGENTE: Implementar auditoría de accesos LDAP**
+4. ⏳ Crear suite de pruebas unitarias para funciones optimizadas
+5. ⏳ Implementar tabla `config_casos_especiales` para IDs hardcodeados
+6. ⏳ Migrar años hardcodeados a rango dinámico
+7. ⏳ Separar generación HTML de lógica de negocio
+8. ⏳ Crear package de funciones auxiliares comunes (LDAP_UTILS)
+9. ⏳ Crear índices recomendados en tablas de calendario
+10. ⏳ Considerar migración UTF-8 para caracteres especiales
 9. ⏳ Parametrizar fechas hardcodeadas en extrae_agenda
 10. ⏳ Evaluar unificación de devuelve_valor_campo y devuelve_valor_campo_agenda
 
@@ -347,14 +378,16 @@ trabajo_plsql_permisos/
     ├── GRUPO2_OPTIMIZACION.md          ✅ Completado
     ├── GRUPO3_OPTIMIZACION.md          ✅ Completado
     ├── GRUPO4_OPTIMIZACION.md          ✅ Completado
+    ├── GRUPO5_OPTIMIZACION.md          ✅ Completado
     ├── RESUMEN_GRUPOS_OPTIMIZACION.md  ✅ Este documento
     │
     ├── [Grupo 1 - 10 archivos .fnc]    ✅ Optimizados
     ├── [Grupo 2 - 10 archivos .fnc]    ✅ Optimizados
     ├── [Grupo 3 - 10 archivos .fnc]    ✅ Optimizados
     ├── [Grupo 4 - 10 archivos .fnc]    ✅ Optimizados
+    ├── [Grupo 5 - 10 archivos .fnc]    ✅ Optimizados
     │
-    └── [Grupos 5-10 - 51 archivos .fnc] ⏳ Pendientes
+    └── [Grupos 6-10 - 41 archivos .fnc] ⏳ Pendientes
 ```
 
 ---
@@ -363,31 +396,32 @@ trabajo_plsql_permisos/
 
 **Repositorio:** trabajo_plsql_permisos  
 **Total funciones:** 91  
-**Funciones optimizadas:** 40 (44%)  
-**Funciones pendientes:** 51 (56%)  
+**Funciones optimizadas:** 50 (55%)  
+**Funciones pendientes:** 41 (45%)  
 
 **Fecha inicio:** Diciembre 2025  
 **Última actualización:** 06/12/2025  
-**Estado:** 🟢 En Progreso (Grupo 4 completado)
+**Estado:** 🟢 En Progreso (Grupo 5 completado) | ⚠️ Vulnerabilidades Críticas Identificadas
 
 ---
 
 ## 🎖️ Logros Hasta el Momento
 
 ### Código Limpio
-- ✅ Eliminación 100% constantes mágicas (185 → 0)
+- ✅ Eliminación 100% constantes mágicas (220 → 0)
 - ✅ Eliminación 100% código inalcanzable (15 líneas → 0)
-- ✅ Eliminación 100% código comentado (~200 líneas → 0)
-- ✅ Eliminación 100% SELECT FROM DUAL (85 → 0)
+- ✅ Eliminación 100% código comentado (~380 líneas → 0)
+- ✅ Eliminación 100% SELECT FROM DUAL (87 → 0)
 - ✅ Eliminación 100% cursores manuales (5 → 0)
-- ✅ Eliminación 100% conversiones redundantes TO_DATE(TO_CHAR()) (12 → 0)
+- ✅ Eliminación 100% conversiones redundantes TO_DATE(TO_CHAR()) (14 → 0)
 - ✅ Eliminación 85% código duplicado
 
 ### Documentación
-- ✅ +2180% aumento en comentarios (100 → 2,280 líneas)
-- ✅ 40 funciones con documentación JavaDoc completa
-- ✅ 4 documentos de resumen detallados
+- ✅ +2809% aumento en comentarios (110 → 3,200 líneas)
+- ✅ 50 funciones con documentación JavaDoc completa
+- ✅ 5 documentos de resumen detallados
 - ✅ Múltiples ejemplos de uso incluidos
+- ⚠️ **3 funciones con alertas de seguridad críticas documentadas**
 
 ### Rendimiento
 - ✅ ~40% reducción context switches (eliminación DUAL)
@@ -395,6 +429,12 @@ trabajo_plsql_permisos/
 - ✅ ~25% reducción en código duplicado (devuelve_periodo_fichaje)
 - ✅ ~20% mejora en consultas (ROWNUM, eliminación DISTINCT)
 - ✅ ~15% mejor gestión memoria (FOR LOOP)
+
+### Seguridad
+- ⚠️ **3 vulnerabilidades críticas identificadas** (credenciales LDAP hardcodeadas)
+- ⚠️ Alertas de seguridad documentadas en código fuente
+- ⚠️ Recomendaciones de migración a LDAPS documentadas
+- ⚠️ Plan de acción para corrección definido
 
 ---
 
