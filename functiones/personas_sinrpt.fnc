@@ -1,80 +1,116 @@
-create or replace function rrhh.
+/*******************************************************************************
+ * Función: PERSONAS_SINRPT
+ * 
+ * Propósito:
+ *   Devuelve un resumen de empleados sin RPT que tienen permisos/vacaciones 
+ *   en un rango de fechas dado, basándose en la estructura de firma del funcionario.
+ *
+ * @param V_FECHA_INICIO         Fecha inicial del rango a consultar
+ * @param V_FECHA_FIN            Fecha final del rango a consultar
+ * @param V_ID_FUNCIONARIO_FIRMA ID del funcionario firmante (puede ser JS, delegado o JA)
+ * @return VARCHAR2              Mensaje con el formato: "No incluida en la RPT (X de un total de Y Func.)"
+ *
+ * Lógica:
+ *   1. Identifica funcionarios relacionados con el firmante (JS, delegado_js o JA)
+ *   2. Excluye aquellos que SÍ están en personal_rpt bajo la misma unidad
+ *   3. Para cada funcionario sin RPT, verifica si tiene permisos aprobados (estado=80)
+ *      que se solapen con el rango de fechas dado
+ *   4. Retorna un resumen contando cuántos tienen permisos del total sin RPT
+ *
+ * Dependencias:
+ *   - Tabla: rrhh.funcionario_firma (id_js, id_delegado_js, id_ja)
+ *   - Tabla: personal_rpt (id_funcionario, id_unidad)
+ *   - Tabla: permiso (id_funcionario, fecha_inicio, fecha_fin, id_estado, anulado)
+ *
+ * Mejoras aplicadas:
+ *   - Cursor manual → FOR LOOP para mejor gestión de memoria
+ *   - Constante C_ESTADO_APROBADO para el valor mágico 80
+ *   - Uso de CASE en lugar de IF para concatenación
+ *   - SELECT EXISTS en lugar de COUNT DISTINCT con ROWNUM para mejor rendimiento
+ *   - Eliminación de código comentado
+ *   - Variables descriptivas (v_contador_primero en lugar de i_no_hay_datos)
+ *   - Documentación JavaDoc completa
+ *
+ * Historial:
+ *   - 06/12/2025: Optimización Grupo 8 - mejor rendimiento y documentación
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.PERSONAS_SINRPT(
+    V_FECHA_INICIO         IN DATE,
+    V_FECHA_FIN            IN DATE,
+    V_ID_FUNCIONARIO_FIRMA IN VARCHAR2
+) RETURN VARCHAR2 IS
 
- PERSONAS_SINRPT(V_FECHA_INICIO         IN DATE,
-                 V_FECHA_FIN            IN DATE,
-                 V_ID_FUNCIONARIO_FIRMA IN VARCHAR2) return varchar2 is
+    -- Constantes
+    C_ESTADO_APROBADO    CONSTANT NUMBER := 80;
+    C_DESC_UNIDAD        CONSTANT VARCHAR2(512) := 'No incluida en la RPT';
+    
+    -- Variables de resultado
+    v_resultado           VARCHAR2(4000);
+    v_lista_funcionario   VARCHAR2(4000);
+    
+    -- Contadores
+    i_personas_vacaciones NUMBER := 0;
+    i_personas_total      NUMBER := 0;
+    i_temp                NUMBER;
+    v_contador_primero    BOOLEAN := TRUE;
+    
+    -- Cursor: Funcionarios relacionados con el firmante pero NO en RPT
+    CURSOR c_funcionarios_sin_rpt IS
+        SELECT id_funcionario
+        FROM rrhh.funcionario_firma
+        WHERE (id_js = V_ID_FUNCIONARIO_FIRMA 
+            OR id_delegado_js = V_ID_FUNCIONARIO_FIRMA 
+            OR id_ja = V_ID_FUNCIONARIO_FIRMA)
+        MINUS
+        SELECT id_funcionario
+        FROM personal_rpt
+        WHERE id_unidad LIKE (
+            SELECT id_unidad || '%'
+            FROM personal_rpt
+            WHERE id_funcionario = V_ID_FUNCIONARIO_FIRMA
+        );
 
-  Result                varchar2(4000);
-  v_lista_funcionario   varchar2(4000);
-  i_id_funcionario      number;
-  i_no_hay_datos        number;
-  i_personas_vacaciones number;
-  i_personas_total      number;
-  i_temp                number;
-  i_Desc_unidad         varchar2(512);
+BEGIN
+    v_lista_funcionario := '';
+    
+    -- Recorrer funcionarios sin RPT
+    FOR rec IN c_funcionarios_sin_rpt LOOP
+        -- Construir lista de funcionarios (por si se necesita en el futuro)
+        v_lista_funcionario := v_lista_funcionario || 
+            CASE WHEN v_contador_primero THEN '''' ELSE ',''' END || 
+            rec.id_funcionario || '''';
+        v_contador_primero := FALSE;
+        
+        i_personas_total := i_personas_total + 1;
+        
+        -- Verificar si tiene permisos aprobados en el rango de fechas
+        BEGIN
+            SELECT CASE WHEN EXISTS (
+                SELECT 1
+                FROM permiso p
+                WHERE p.id_funcionario = rec.id_funcionario
+                    AND ((fecha_inicio BETWEEN V_FECHA_INICIO AND V_FECHA_FIN) 
+                        OR (fecha_fin BETWEEN V_FECHA_INICIO AND V_FECHA_FIN))
+                    AND (anulado = 'NO' OR anulado IS NULL)
+                    AND id_estado = C_ESTADO_APROBADO
+                    AND ROWNUM = 1
+            ) THEN 1 ELSE 0 END
+            INTO i_temp
+            FROM DUAL;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                i_temp := 0;
+        END;
+        
+        i_personas_vacaciones := i_personas_vacaciones + i_temp;
+    END LOOP;
+    
+    -- Construir mensaje de resultado
+    v_resultado := C_DESC_UNIDAD || '  (' || i_personas_vacaciones ||
+                   ' de un total de ' || i_personas_total || ' Func.)';
+    
+    RETURN v_resultado;
 
-  cursor c1 is
-    select id_funcionario
-      from rrhh.funcionario_firma
-     where (id_js = V_ID_FUNCIONARIO_FIRMA or
-           id_delegado_js = V_ID_FUNCIONARIO_FIRMA or
-           id_ja = V_ID_FUNCIONARIO_FIRMA)
-    minus
-    select id_funcionario
-      from personal_rpt
-     where id_unidad like
-           (select id_unidad || '%'
-              from personal_rpt
-             where id_funcionario = V_ID_FUNCIONARIO_FIRMa);
-begin
-  v_lista_funcionario   := '';
-  i_no_hay_datos        := 0;
-  i_personas_vacaciones := 0;
-  i_personas_total      := 0;
-  i_Desc_unidad         := 'No incluida en la RPT';
-  OPEN C1;
-  LOOP
-    FETCH C1
-      INTO i_id_funcionario;
-    EXIT WHEN C1%NOTFOUND;
-
-    IF i_no_hay_datos = 0 then
-      v_lista_funcionario := '''' || i_id_funcionario || '''';
-    ELSE
-      v_lista_funcionario := v_lista_funcionario || ',''' ||
-                             i_id_funcionario || '''';
-    END IF;
-
-    i_personas_total := 1 + i_personas_total;
-
-    BEGIN
-      select count(distinct p.id_funcionario)
-        into i_temp
-        from permiso p
-       where p.id_funcionario = i_id_funcionario
-         and rownum < 2
-         and ((fecha_inicio between V_FECHA_INICIO and V_FECHA_FIN) OR
-             (fecha_fin between V_FECHA_INICIO and V_FECHA_FIN))
-         and (ANULADO = 'NO' OR ANULADO is NULL)
-         and id_estado = 80;
-    EXCEPTION
-      WHEN NO_DATA_FOUND THEN
-        i_temp := 0;
-    END;
-    i_personas_vacaciones := i_personas_vacaciones + i_temp;
-
-  END LOOP;
-  CLOSE C1;
-
-  -- if  length(v_lista_funcionario)> 0 Then
-  --   v_lista_funcionario:= '('|| v_lista_funcionario || ')';
-  --end if;
-
-  --Result:=    i_Desc_unidad || ' tiene '|| i_personas_vacaciones ||'/' || i_personas_total || '. Entre las fechas de este permiso.';
-  Result := i_Desc_unidad || '  (' || i_personas_vacaciones ||
-            ' de un total de ' || i_personas_total || ' Func.)';
-  return(Result);
-
-end PERSONAS_SINRPT;
+END PERSONAS_SINRPT;
 /
 
