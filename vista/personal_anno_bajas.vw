@@ -25,12 +25,10 @@
     Mejora estimada de rendimiento: ~75% menos tiempo de ejecución
     (1 scan de tabla vs 4 scans)
 
-    NOTA: Para agregar nuevos años, solo modificar el filtro de fechas.
-    No es necesario agregar más UNIONs.
-
-    EXTENSIÓN RECOMENDADA:
-    - Para incluir años adicionales, cambiar el rango de fechas
-    - O mejor aún, eliminar el filtro de años para obtener todos los datos
+    NOTA: Para agregar nuevos años, modificar el filtro de fechas.
+    
+    ADVERTENCIA: Las fechas están hardcodeadas (2018-2021). Actualizar 
+    periódicamente o cambiar a filtro dinámico según necesidades.
 
   ÍNDICES RECOMENDADOS:
     - CREATE INDEX idx_personal_fecha_baja ON personal(fecha_baja);

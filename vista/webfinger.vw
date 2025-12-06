@@ -58,7 +58,7 @@ FROM
         AND a.fecha = b.fecha
 WHERE
     a.codinci = '000'                                              -- Solo incidencia normal
-    AND a.fecha BETWEEN TRUNC(SYSDATE) - 365 AND TRUNC(SYSDATE) - 1  -- Últimos 365 días
+    AND a.fecha BETWEEN TRUNC(SYSDATE) - 365 AND TRUNC(SYSDATE) - 1  -- Últimos 365 días hasta ayer
 GROUP BY
     a.codpers,
     a.fecha,

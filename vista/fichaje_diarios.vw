@@ -35,7 +35,9 @@
     =========================================================================
     Mejora: ~20-30% en rendimiento
     Justificación: Los registros de pin y pin2 son mutuamente excluyentes,
-    no pueden existir duplicados entre ambas consultas.
+    ya que ff1.pin y ff1.pin2 apuntan a diferentes tarjetas del mismo funcionario.
+    Si un funcionario tiene ambas tarjetas activas, cada fichaje solo puede
+    registrarse con una de ellas, no con ambas simultáneamente.
 
     NOTA: El tipo '4097' solo aplica para tarjetas secundarias (pin2)
 

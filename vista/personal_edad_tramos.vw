@@ -31,7 +31,9 @@
 
     Mejora estimada de rendimiento: ~80% menos tiempo de ejecución
 
-    NOTA: El cálculo de edad es aproximado (solo compara años, no fecha exacta)
+    NOTA: El cálculo de edad es aproximado (solo compara años, no fecha exacta).
+    Para mayor precisión se podría usar MONTHS_BETWEEN, pero se mantiene
+    la lógica original por compatibilidad con reportes existentes.
 
     ÍNDICES RECOMENDADOS:
     - CREATE INDEX idx_personal_activo ON personal(fecha_baja, fecha_nacimiento);

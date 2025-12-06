@@ -61,8 +61,7 @@ SELECT
 FROM 
     bolsa_saldo_periodo b
     INNER JOIN bolsa_tipo_acumulacion t 
-        ON b.id_acumulador = t.id_acumulador
-    LEFT OUTER JOIN bolsa_movimiento bm 
-        ON b.id_funcionario = bm.id_funcionario
-        AND b.id_ano = bm.id_ano;
+        ON b.id_acumulador = t.id_acumulador;
+    -- NOTA: Se eliminó el LEFT JOIN con bolsa_movimiento que era innecesario
+    -- ya que no se utilizaban campos de esa tabla en el SELECT
 
