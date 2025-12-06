@@ -89,8 +89,11 @@ BEGIN
                 SELECT 1
                 FROM permiso p
                 WHERE p.id_funcionario = rec.id_funcionario
-                    AND ((fecha_inicio BETWEEN V_FECHA_INICIO AND V_FECHA_FIN) 
-                        OR (fecha_fin BETWEEN V_FECHA_INICIO AND V_FECHA_FIN))
+                    AND (
+                        (fecha_inicio BETWEEN V_FECHA_INICIO AND V_FECHA_FIN)
+                        OR (fecha_fin BETWEEN V_FECHA_INICIO AND V_FECHA_FIN)
+                        OR (fecha_inicio <= V_FECHA_INICIO AND fecha_fin >= V_FECHA_FIN)
+                    )
                     AND (anulado = 'NO' OR anulado IS NULL)
                     AND id_estado = C_ESTADO_APROBADO
                     AND ROWNUM = 1
