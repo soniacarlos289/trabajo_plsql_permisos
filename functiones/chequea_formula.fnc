@@ -18,13 +18,18 @@
  *   @param v_FECHA_FIN (DATE) - Fecha fin del permiso solicitado
  *
  * RETORNO:
- *   @return NUMBER - Resultado de la validacion:
+ *   @return NUMBER - Actualmente siempre retorna 0 (validacion deshabilitada)
+ *                    Cuando se active la validacion:
  *                    0 = Sin conflicto (permite solicitar)
  *                    1 = Existe conflicto de formula
  *
- * NOTA IMPORTANTE:
- *   La funcion actualmente siempre retorna 0 (linea result:=0 al final)
- *   Esto parece ser un bypass temporal de la regla de negocio.
+ * !! BYPASS ACTIVO !!
+ *   La validacion de formula esta DESHABILITADA en produccion.
+ *   El codigo original incluye "result:=0" al final que sobreescribe
+ *   cualquier validacion. Este comportamiento se ha mantenido para
+ *   preservar la compatibilidad con el sistema actual.
+ *   Para activar la validacion, eliminar la linea "v_resultado := 0"
+ *   al final de la funcion.
  *
  * TIPOS DE PERMISOS CLASIFICADOS:
  *   VA (Vacaciones): 01000, 030XX, 01015, 15000 (>240h)
@@ -200,8 +205,9 @@ BEGIN
         v_resultado := 0;
     END IF;
     
-    -- NOTA: Bypass temporal - siempre retorna 0
-    -- Descomentar la siguiente linea para activar la validacion
+    -- !! BYPASS ACTIVO !! (preservado del codigo original)
+    -- Esta linea deshabilita la validacion de formula.
+    -- Para activar la validacion, comentar o eliminar la siguiente linea:
     v_resultado := 0;
     
     RETURN v_resultado;

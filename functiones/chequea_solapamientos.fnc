@@ -67,13 +67,13 @@ CREATE OR REPLACE FUNCTION RRHH.CHEQUEA_SOLAPAMIENTOS(
     C_RESULTADO_OK       CONSTANT VARCHAR2(1) := '0';
     C_MSG_PERMISO        CONSTANT VARCHAR2(50) := 'Existe un permiso entre esas fechas';
     C_MSG_AUSENCIA       CONSTANT VARCHAR2(50) := 'Existe una ausencia entre esas fechas';
-    C_MSG_BAJA           CONSTANT VARCHAR2(50) := 'Existe una baja entre esas fechas';
+    -- Nota: C_MSG_BAJA no se usa porque las bajas ya se gestionan como permisos
     
     -- Variables de conteo
     v_count_permisos     NUMBER := 0;
     v_count_permisos_h   NUMBER := 0;
     v_count_ausencias    NUMBER := 0;
-    v_count_bajas        NUMBER := 0;
+    -- Nota: v_count_bajas eliminada porque las bajas se gestionan como permisos
     
     -- Variables de fechas con hora
     v_fecha_hora_inicio  DATE;
@@ -153,13 +153,13 @@ BEGIN
     END IF;  -- IF v_FECHA_FIN IS NOT NULL
     
     -- Determinar resultado final
+    -- Nota: La validacion de bajas esta deshabilitada (v_count_bajas siempre es 0)
+    -- porque las bajas ya se gestionan como permisos en el sistema
     IF (v_count_permisos <> 0 AND V_ID_TIPO_PERMISO <> C_TIPO_PERMISO_HORAS) OR
        (v_count_permisos_h <> 0 AND V_ID_TIPO_PERMISO = C_TIPO_PERMISO_HORAS) THEN
         v_resultado := C_MSG_PERMISO;
     ELSIF v_count_ausencias <> 0 THEN
         v_resultado := C_MSG_AUSENCIA;
-    ELSIF v_count_bajas <> 0 THEN
-        v_resultado := C_MSG_BAJA;
     ELSE
         v_resultado := C_RESULTADO_OK;
     END IF;
