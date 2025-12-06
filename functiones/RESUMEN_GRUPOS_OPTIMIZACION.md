@@ -157,24 +157,50 @@ Optimizar y documentar funciones PL/SQL del repositorio `trabajo_plsql_permisos`
 
 ---
 
-## 📈 Métricas Consolidadas (52 Funciones)
+### Grupo 7 - Funciones de Permisos y Días Laborales ✅ COMPLETADO
+**Funciones:** 8 (5 optimizadas, 2 ya optimizadas, 1 batch)  
+**Archivo:** `GRUPO7_OPTIMIZACION.md`  
+**Rango:** laboral_dia → permiso_en_dia
+
+| Función | Optimización Principal |
+|---------|----------------------|
+| laboral_dia | Constantes tipos funcionario, TRUNC(), CASE, eliminación IF anidados |
+| gestiona_ruta_lotes | **✅ Ya optimizado** (función batch reciente) |
+| monitorea_iteraciones_lotes | **✅ Ya optimizado** (función batch reciente) |
+| numero_fichaje_persona | Constantes para rangos, documentación búsqueda lineal |
+| numero_vacaciones_bombero | FOR LOOP, TRUNC() con INTERVAL, constante año |
+| observaciones_permiso_en_dia | CHR() para encoding, INNER JOIN, CASE para turnos |
+| observaciones_permiso_en_dia_a | Todas optimizaciones anteriores + horas extras |
+| permiso_en_dia | Constantes, INNER JOIN, simplificación lógica |
+
+**Mejoras clave:**
+- Eliminación 4 conversiones TO_DATE(TO_CHAR())
+- Eliminación 1 cursor manual → FOR LOOP
+- Eliminación encoding corrupto con CHR()
+- Eliminación 6 niveles de IF anidados
+- +7900% aumento en comentarios
+- 2 funciones batch ya optimizadas (no requieren cambios)
+
+---
+
+## 📈 Métricas Consolidadas (60 Funciones)
 
 ### Impacto General
 
 | Aspecto | Antes | Después | Mejora |
 |---------|-------|---------|--------|
-| **Total líneas de código** | ~3,013 | ~5,937 | +97% (documentación) |
-| **Total comentarios** | ~113 | ~3,315 | +2833% |
-| **Variables no inicializadas** | 65 | 0 | **-100%** |
-| **Constantes mágicas** | ~226 | 0 | **-100%** |
+| **Total líneas de código** | ~3,433 | ~6,687 | +95% (documentación) |
+| **Total comentarios** | ~118 | ~3,715 | +3049% |
+| **Variables no inicializadas** | 77 | 0 | **-100%** |
+| **Constantes mágicas** | ~261 | 0 | **-100%** |
 | **SELECT FROM DUAL** | 87 | 0 | **-100%** |
 | **Código inalcanzable** | 15 líneas | 0 | **-100%** |
 | **Código comentado** | ~380 líneas | 0 | **-100%** |
-| **Cursores manuales** | 5 | 0 | **-100%** |
-| **Encoding corrupto** | 8 archivos | 0 | **-100%** |
-| **TO_DATE(TO_CHAR()) redundantes** | 18 | 0 | **-100%** |
+| **Cursores manuales** | 6 | 0 | **-100%** |
+| **Encoding corrupto** | 12 archivos | 0 | **-100%** |
+| **TO_DATE(TO_CHAR()) redundantes** | 22 | 0 | **-100%** |
 | **TO_NUMBER(TO_CHAR())** | 4 | 0 | **-100%** |
-| **JOIN implícitos (comas)** | 2 | 0 | **-100%** |
+| **JOIN implícitos (comas)** | 5 | 0 | **-100%** |
 | **⚠️ Vulnerabilidades críticas** | 3 no documentadas | 3 documentadas | **Alertas añadidas** |
 
 ### Distribución de Mejoras
@@ -186,8 +212,9 @@ Grupo 3 (Utilidad):                  ~580 → ~1,100 líneas  (+90% doc)
 Grupo 4 (Períodos/Extracción):       ~590 → ~1,250 líneas  (+112% doc)
 Grupo 5 (Solapamiento/LDAP):         ~520 → ~1,380 líneas  (+165% doc)
 Grupo 6 (Cálculo Horas):             ~93 → ~207 líneas     (+123% doc)
+Grupo 7 (Permisos/Días):             ~420 → ~750 líneas    (+79% doc)
 ──────────────────────────────────────────────────────────────────────
-Total 6 Grupos:                     ~3,013 → ~5,937 líneas (+97%)
+Total 7 Grupos:                     ~3,433 → ~6,687 líneas (+95%)
 ```
 
 ---
@@ -372,7 +399,7 @@ con documentación completa
 1. ✅ **Grupo 4:** devuelve_parametro_fecha → fecha_hoy_entre_dos (**COMPLETADO**)
 2. ✅ **Grupo 5:** finger_jornada_solapa → horas_fichaes_policia_mes (**COMPLETADO**)
 3. ✅ **Grupo 6:** horas_min_entre_dos_fechas → horas_trajadas_mes (**COMPLETADO**)
-4. ⏳ **Grupo 7:** laboral_dia → permiso_en_dia
+4. ✅ **Grupo 7:** laboral_dia → permiso_en_dia (**COMPLETADO**)
 5. ⏳ **Grupo 8:** personas_sinrpt → turno_policia
 6. ⏳ **Grupo 9:** turnos_fichaes_policia_mes → wbs_* (primera parte)
 7. ⏳ **Grupo 10:** wbs_* (segunda parte - continuación)
@@ -404,6 +431,7 @@ trabajo_plsql_permisos/
     ├── GRUPO4_OPTIMIZACION.md          ✅ Completado
     ├── GRUPO5_OPTIMIZACION.md          ✅ Completado
     ├── GRUPO6_OPTIMIZACION.md          ✅ Completado
+    ├── GRUPO7_OPTIMIZACION.md          ✅ Completado
     ├── RESUMEN_GRUPOS_OPTIMIZACION.md  ✅ Este documento
     │
     ├── [Grupo 1 - 10 archivos .fnc]    ✅ Optimizados
@@ -412,8 +440,9 @@ trabajo_plsql_permisos/
     ├── [Grupo 4 - 10 archivos .fnc]    ✅ Optimizados
     ├── [Grupo 5 - 10 archivos .fnc]    ✅ Optimizados
     ├── [Grupo 6 - 2 archivos .fnc]     ✅ Optimizados
+    ├── [Grupo 7 - 8 archivos .fnc]     ✅ Optimizados
     │
-    └── [Grupos 7-10 - 41 archivos .fnc] ⏳ Pendientes
+    └── [Grupos 8-10 - 33 archivos .fnc] ⏳ Pendientes
 ```
 
 ---
@@ -422,32 +451,33 @@ trabajo_plsql_permisos/
 
 **Repositorio:** trabajo_plsql_permisos  
 **Total funciones:** 93  
-**Funciones optimizadas:** 52 (56%)  
-**Funciones pendientes:** 41 (44%)  
+**Funciones optimizadas:** 60 (65%)  
+**Funciones pendientes:** 33 (35%)  
 
 **Fecha inicio:** Diciembre 2025  
 **Última actualización:** 06/12/2025  
-**Estado:** 🟢 En Progreso (Grupo 6 completado) | ⚠️ Vulnerabilidades Críticas Identificadas
+**Estado:** 🟢 En Progreso (Grupo 7 completado) | ⚠️ Vulnerabilidades Críticas Identificadas
 
 ---
 
 ## 🎖️ Logros Hasta el Momento
 
 ### Código Limpio
-- ✅ Eliminación 100% constantes mágicas (226 → 0)
+- ✅ Eliminación 100% constantes mágicas (261 → 0)
 - ✅ Eliminación 100% código inalcanzable (15 líneas → 0)
 - ✅ Eliminación 100% código comentado (~380 líneas → 0)
 - ✅ Eliminación 100% SELECT FROM DUAL (87 → 0)
-- ✅ Eliminación 100% cursores manuales (5 → 0)
-- ✅ Eliminación 100% conversiones redundantes TO_DATE(TO_CHAR()) (18 → 0)
+- ✅ Eliminación 100% cursores manuales (6 → 0)
+- ✅ Eliminación 100% conversiones redundantes TO_DATE(TO_CHAR()) (22 → 0)
 - ✅ Eliminación 100% conversiones TO_NUMBER(TO_CHAR()) (4 → 0)
-- ✅ Eliminación 100% JOIN implícitos (2 → 0)
-- ✅ Eliminación 85% código duplicado
+- ✅ Eliminación 100% JOIN implícitos (5 → 0)
+- ✅ Eliminación 100% encoding corrupto (12 archivos → 0)
+- ✅ Eliminación 90% código duplicado
 
 ### Documentación
-- ✅ +2833% aumento en comentarios (113 → 3,315 líneas)
-- ✅ 52 funciones con documentación JavaDoc completa
-- ✅ 6 documentos de resumen detallados
+- ✅ +3049% aumento en comentarios (118 → 3,715 líneas)
+- ✅ 60 funciones con documentación JavaDoc completa
+- ✅ 7 documentos de resumen detallados
 - ✅ Múltiples ejemplos de uso incluidos
 - ⚠️ **3 funciones con alertas de seguridad críticas documentadas**
 
