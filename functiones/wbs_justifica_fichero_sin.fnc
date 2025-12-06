@@ -102,9 +102,9 @@ BEGIN
             
         EXCEPTION
             WHEN DUP_VAL_ON_INDEX THEN
-                -- Si ya existe, actualizar el BLOB
+                -- Si ya existe, actualizar el BLOB con el nuevo fichero
                 UPDATE ficheros_justificantes
-                SET fichero = wbs_justifica_fichero_sin.fichero
+                SET fichero = wbs_justifica_fichero_sin.fichero  -- Parámetro IN de la función
                 WHERE id = v_enlace_fichero;
                 
                 v_resultado := C_MSG_ACTUALIZADO;

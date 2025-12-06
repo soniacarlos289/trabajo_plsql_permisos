@@ -44,7 +44,8 @@
  *
  * Problemas identificados:
  *   ⚠️ CRÍTICO: ID 101217 hardcodeado en WHERE (debería usar i_id_funcionario)
- *   ⚠️ CRÍTICO: Fecha hardcodeada '04/05/2024' en cursor Cfichajes_Servicio
+ *   ⚠️ CRÍTICO: Fecha '04/05/2024' hardcodeada en cursor Cfichajes_Servicio (líneas 160-161)
+ *                debería usar d_fecha_entrada pero se ignora el parámetro v_fecha
  *   ⚠️ Subconsulta repetida 3 veces (código duplicado de jerarquía)
  *   ⚠️ DISTINCT con ROWNUM<2 innecesario en subconsulta
  *
