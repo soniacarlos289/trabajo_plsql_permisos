@@ -1,3 +1,46 @@
+/*
+================================================================================
+  VISTA: rrhh.resumen_saldo_bolsa
+================================================================================
+  PROPÓSITO:
+    Genera un resumen pivoteado del saldo de la bolsa de horas por funcionario
+    y año, mostrando el saldo de cada mes como columna HTML con formato de color
+    (rojo para negativos, negro para positivos).
+
+  CAMPOS RETORNADOS:
+    - id_funcionario: Identificador del funcionario
+    - id_ano: Año del resumen
+    - p_enero_sa - p_diciembre_sa: Saldo de cada mes en formato HTML
+    - p_ene_mas_sa: Saldo de enero del año siguiente
+    - saldos_positivos: Total de saldos positivos
+    - saldos_negativos: Total de saldos negativos
+
+  FORMATO DE SALIDA:
+    - Valores negativos: <font color="#FF0000">-HH:MM</font>
+    - Valores positivos: <font color="#000000">HH:MM</font>
+
+  NOTAS DE OPTIMIZACIÓN:
+    =========================================================================
+    ADVERTENCIA: Vista MUY compleja con 15 UNIONs
+    =========================================================================
+    Cada UNION consulta la misma tabla para un período diferente.
+
+    ALTERNATIVA RECOMENDADA: Usar pivoteo con DECODE similar a 
+    bolsa_saldo_periodo_resumen. Esto reduciría 15 consultas a 1.
+
+    La estructura actual es muy costosa pero se mantiene por compatibilidad
+    con la generación de HTML específica para cada mes.
+
+    ÍNDICES RECOMENDADOS:
+    - CREATE INDEX idx_bolsa_mov_periodo ON bolsa_movimiento(periodo, anulado);
+
+  DEPENDENCIAS:
+    - Tabla: bolsa_movimiento
+    - Tabla: bolsa_tipo_movimiento
+
+  ÚLTIMA MODIFICACIÓN: 06/12/2025 - Documentación añadida
+================================================================================
+*/
 CREATE OR REPLACE FORCE VIEW RRHH.RESUMEN_SALDO_BOLSA AS
 (
 select  id_funcionario,id_ano ,

@@ -1,3 +1,71 @@
+/*
+================================================================================
+  VISTA: rrhh.vista_permiso_bomberos
+================================================================================
+  PROPÓSITO:
+    Proporciona información específica de permisos y ausencias para personal
+    de bomberos (tipo_funcionario2 = 23). Calcula las horas de inicio y fin
+    según los turnos de guardia y las políticas de horarios vigentes.
+
+  CAMPOS RETORNADOS:
+    - id_permiso: Identificador único del permiso/ausencia
+    - estado: Estado del permiso ('Activo'/'Anulado')
+    - id_funcionario: Identificador del funcionario
+    - nombre, ape1, ape2: Datos del funcionario
+    - id_tipo_permiso: Tipo de permiso (con mapeo especial para bajas)
+    - desc_tipo_permiso: Descripción del tipo de permiso
+    - fecha_guardia: Fecha de inicio original del permiso
+    - fecha_inicio: Timestamp calculado de inicio según turno
+    - fecha_fin: Timestamp calculado de fin según turno
+    - duracion_horas: Duración en formato HH:MM o días*8
+    - observaciones: Notas adicionales o tipo de baja
+
+  TURNOS DE GUARDIA (campos tu1_14_22, tu2_22_06, tu3_04_14):
+    Antes del 21/05/2022:
+    - Turno 1 (14-22): 14:00 a 22:00
+    - Turno 2 (22-06): 22:00 a 06:00 (día siguiente)
+    - Turno 3 (06-14): 06:00 a 14:00 (día siguiente)
+
+    Desde el 21/05/2022:
+    - Turno 1: 08:00 a 16:00
+    - Turno 2: 16:00 a 00:00 (día siguiente)
+    - Turno 3: 00:00 a 08:00 (día siguiente)
+
+  MAPEO DE TIPOS DE BAJA (para tipo '11300'):
+    - AL: Accidente Laboral (11303)
+    - AR: Accidente Laboral Recaída (11304)
+    - AN: Accidente No Laboral (11302)
+    - EC: Enfermedad Común (11301)
+
+  FUENTES DE DATOS (UNION de 4 consultas):
+    1. Permisos de personal de bomberos
+    2. Ausencias de personal de bomberos
+    3. Registro especial ID 549117 (caso específico)
+    4. Registro especial ID 949117 (caso específico)
+
+  NOTAS DE OPTIMIZACIÓN:
+    =========================================================================
+    ADVERTENCIA: Vista muy compleja con múltiples UNIONs y CASE/DECODE
+    =========================================================================
+    - Los cálculos de fecha_inicio y fecha_fin son extensos
+    - Los registros hardcodeados (549117, 949117) deberían moverse a datos
+    - Considerar dividir en vistas más pequeñas para mejor mantenimiento
+
+    ÍNDICES RECOMENDADOS:
+    - CREATE INDEX idx_permiso_func_ano ON permiso(id_funcionario, id_ano);
+    - CREATE INDEX idx_ausencia_func_ano ON ausencia(id_funcionario, id_ano);
+    - CREATE INDEX idx_personal_new_tipo ON personal_new(tipo_funcionario2);
+
+  DEPENDENCIAS:
+    - Tabla: permiso
+    - Tabla: ausencia
+    - Vista: personal_new
+    - Tabla: tr_tipo_permiso
+    - Tabla: tr_tipo_ausencia
+
+  ÚLTIMA MODIFICACIÓN: 06/12/2025 - Documentación añadida
+================================================================================
+*/
 create or replace force view rrhh.vista_permiso_bomberos as
 select "ID_PERMISO","ESTADO","ID_FUNCIONARIO","NOMBRE","APE1","APE2","ID_TIPO_PERMISO","DESC_TIPO_PERMISO","FECHA_GUARDIA","FECHA_INICIO","FECHA_FIN","DURACION_HORAS","OBSERVACIONES" from(
 select distinct p.id_permiso as ID_PERMISO,

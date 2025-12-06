@@ -1,3 +1,44 @@
+/*
+================================================================================
+  VISTA: rrhh.fichaje_saldo_completa_fin
+================================================================================
+  PROPÓSITO:
+    Versión final de la vista de saldo de fichaje que combina datos de 
+    fichaje_funcionario con fichaje_funcionario_resu_dia y ausencias.
+    Proporciona una visión consolidada para la interfaz web.
+
+  CAMPOS RETORNADOS:
+    - id_dia: Fecha del día
+    - fecha: Enlace HTML al detalle del día
+    - entrada/salida: Horas de entrada y salida
+    - horas_saldo: Horas computadas
+    - fuera_saldo: Horas fuera del cómputo
+    - horas_hacer: Horas que debía trabajar
+    - horas_fichada_dia: Horas totales fichadas en el día
+    - diferencia: Saldo (horas_saldo - horas_hacer)
+    - horas_fuera_saldo: Horas adicionales fuera del saldo
+    - periodo: Código MMAAAA
+    - id_funcionario: Identificador del funcionario
+    - observaciones: Texto generado por función
+
+  FUENTES DE DATOS (UNION):
+    1. fichaje_funcionario + fichaje_funcionario_resu_dia: Fichajes reales
+    2. ausencia + tr_tipo_ausencia: Ausencias del personal
+
+  FUNCIONES UTILIZADAS:
+    - observaciones_permiso_en_dia_a(): Genera observaciones con enlaces
+    - PERMISO_EN_DIA(): Verifica si hay permiso en el día
+
+  DEPENDENCIAS:
+    - Tabla: fichaje_funcionario
+    - Tabla: fichaje_funcionario_resu_dia
+    - Tabla: ausencia, tr_tipo_ausencia
+    - Tabla: webperiodo, calendario_laboral
+    - Tablas auxiliares: persona, apliweb_usuario
+
+  ÚLTIMA MODIFICACIÓN: 06/12/2025 - Documentación añadida
+================================================================================
+*/
 CREATE OR REPLACE FORCE VIEW RRHH.FICHAJE_SALDO_COMPLETA_FIN AS
 select  ID_DIA,
           '<a href=../Finger/detalle_dia.jsp?ID_DIA=' ||

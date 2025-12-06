@@ -1,3 +1,44 @@
+/*
+================================================================================
+  VISTA: rrhh.fichaje_saldo_completa_t
+================================================================================
+  PROPÓSITO:
+    Vista de saldo de fichaje con formato especial para tabla HTML, incluyendo
+    indicador de fila impar/par para estilos alternados. Combina fichajes,
+    permisos, ausencias y fichajes abiertos.
+
+  CAMPOS RETORNADOS:
+    - impar: '0' o '1' para alternar estilos de fila
+    - f: Fecha para ordenamiento
+    - fecha: Enlace HTML al detalle del día
+    - mes_fecha: Código MMAAAA para filtros
+    - entrada/salida: Horas de entrada y salida
+    - horas_fichadas/horas_hacer: Horas fichadas y a realizar
+    - dminutos: Diferencia en minutos (texto)
+    - observaciones: Texto con incidencias o enlaces
+    - mes_fecha_ano: Período completo
+    - id_funcionario: Identificador del funcionario
+
+  FUENTES DE DATOS (UNION de 4 consultas):
+    1. PRESENCI + PERSFICH: Fichajes de presencia
+    2. PERMISO + TR_TIPO_PERMISO: Permisos activos
+    3. AUSENCIA + TR_TIPO_AUSENCIA: Ausencias activas
+    4. FICHABIE: Fichajes abiertos (sin cierre)
+
+  FILTROS APLICADOS:
+    - codinci = '000': Solo incidencia normal
+    - Estados activos (no en 30, 31, 32, 40, 41)
+    - Anulado = 'NO' o NULL
+    - Excluye sábados sin fichaje (día 6)
+
+  DEPENDENCIAS:
+    - Tablas: presenci, persfich, permiso, ausencia, fichabie
+    - Tablas auxiliares: webperiodo, calendario_laboral, persona, apliweb_usuario
+    - Tablas de catálogo: tr_tipo_permiso, tr_tipo_ausencia
+
+  ÚLTIMA MODIFICACIÓN: 06/12/2025 - Documentación añadida
+================================================================================
+*/
 CREATE OR REPLACE FORCE VIEW RRHH.FICHAJE_SALDO_COMPLETA_T AS
 SELECT to_char(mod(rownum, 2)) as impar,
        FECHA as F,
