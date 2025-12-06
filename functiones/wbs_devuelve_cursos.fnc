@@ -145,6 +145,7 @@ BEGIN
             END LOOP;
             
             v_resultado := '{"selector_id_ano": [' ||
+                          -- ⚠️ TODO: Parametrizar años dinámicamente basado en SYSDATE
                           '{"id": 2025,"opcion_menu": "2025"},' ||
                           '{"id": 2024,"opcion_menu": "2024"},' ||
                           '{"id": 2023,"opcion_menu": "2023"},' ||

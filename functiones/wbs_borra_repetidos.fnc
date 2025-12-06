@@ -24,9 +24,10 @@
  *   - COMMIT dentro del loop (mantiene comportamiento original)
  *
  * Nota importante:
- *   ⚠️ Esta función hace COMMIT dentro del loop, lo que puede causar
- *   problemas en transacciones complejas. Considerar refactorizar para
- *   hacer un solo COMMIT al final.
+ *   ⚠️ CRÍTICO: Esta función hace COMMIT dentro del loop, lo que puede causar
+ *   problemas en transacciones complejas y afectar la integridad de datos.
+ *   Recomendación: Refactorizar para hacer un solo COMMIT al final y agregar
+ *   manejo de excepciones con ROLLBACK.
  *
  * Historial:
  *   - 06/12/2025: Optimización y documentación (Grupo 9)

@@ -43,6 +43,7 @@ CREATE OR REPLACE FUNCTION rrhh.wbs_devuelve_datos_personales(
     -- Constante para mensaje de error
     C_MENSAJE_ERROR CONSTANT VARCHAR2(30) := 'Usuario no encontrado';
     C_DOMINIO_EMAIL CONSTANT VARCHAR2(30) := '@aytosalamanca.es';
+    -- ⚠️ TODO: Corregir protocolo HTTP (debe ser http:// o https://)
     C_URL_FOTO CONSTANT VARCHAR2(100) := 'http/probarcelo.aytosa.inet/wbs_pruebas/persona_';
     
     -- Variables
