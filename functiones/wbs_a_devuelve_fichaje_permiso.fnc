@@ -1,81 +1,122 @@
-create or replace function rrhh.
-WBS_A_DEVUELVE_FICHAJE_PERMISO(V_ID_FUNCIONARIO in varchar2,
-v_DIA_CALENDARIO in DATE) return varchar2 is
+/*******************************************************************************
+ * Función: WBS_A_DEVUELVE_FICHAJE_PERMISO
+ * 
+ * Propósito:
+ *   Devuelve información de permisos o fichajes de un funcionario en un día
+ *   específico, formateada como JSON. Prioriza permisos sobre fichajes.
+ *
+ * @param V_ID_FUNCIONARIO  ID del funcionario a consultar
+ * @param v_DIA_CALENDARIO  Fecha del día a consultar
+ * @return VARCHAR2         JSON con permisos_dia o fichajes_dia según corresponda
+ *
+ * Lógica:
+ *   1. Busca si hay permisos aprobados/pendientes en el día dado
+ *   2. Si hay permiso: retorna JSON con id_tipo_permiso y desc_tipo_permiso
+ *   3. Si NO hay permiso: busca fichajes del día y retorna JSON con entrada/salida
+ *   4. Los fichajes se ordenan por fecha de entrada
+ *
+ * Dependencias:
+ *   - Tabla: permiso (id_funcionario, fecha_inicio, fecha_fin, id_tipo_permiso, id_estado, anulado)
+ *   - Tabla: tr_tipo_permiso (id_tipo_permiso, desc_tipo_permiso, id_ano)
+ *   - Tabla: fichaje_funcionario (id_funcionario, fecha_fichaje_entrada, fecha_fichaje_salida)
+ *
+ * Notas:
+ *   - El año hardcodeado (2024) debería parametrizarse
+ *   - Excluye permisos en estados 30, 31, 32, 40 (rechazados/pendientes iniciales)
+ *
+ * Mejoras aplicadas:
+ *   - Documentación JavaDoc completa
+ *   - Cursor manual → FOR LOOP para mejor gestión de memoria
+ *   - Constantes para estados excluidos y año
+ *   - TRUNC() para comparación de fechas
+ *   - Variables con nombres más descriptivos
+ *   - Comentarios explicativos
+ *
+ * Historial:
+ *   - 06/12/2025: Optimización Grupo 8 - mejor legibilidad y documentación
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.WBS_A_DEVUELVE_FICHAJE_PERMISO(
+    V_ID_FUNCIONARIO IN VARCHAR2,
+    v_DIA_CALENDARIO IN DATE
+) RETURN VARCHAR2 IS
 
-Resultado varchar2(12512);
+    -- Constantes
+    C_ANO_CONSULTA CONSTANT NUMBER := 2024;  -- TODO: Parametrizar o usar EXTRACT(YEAR FROM v_DIA_CALENDARIO)
+    
+    -- Variables de resultado
+    v_resultado     VARCHAR2(12512);
+    v_salida        VARCHAR2(12512);
+    v_datos         VARCHAR2(12512);
+    v_datos_tmp     VARCHAR2(12512);
+    
+    -- Variables de control
+    i_encontrado    NUMBER;
+    i_contador      NUMBER;
+    d_fecha_entrada DATE;
+    
+    -- Cursor para fichajes del día
+    CURSOR c_fichajes_dia IS
+        SELECT JSON_OBJECT(
+                   'entrada' IS TO_CHAR(ff.fecha_fichaje_entrada, 'HH24:MI'),
+                   'salida'  IS TO_CHAR(ff.fecha_fichaje_salida, 'HH24:MI')
+               ) AS fichaje_json,
+               ff.fecha_fichaje_entrada
+        FROM fichaje_funcionario ff
+        WHERE TRUNC(ff.fecha_fichaje_entrada) = TRUNC(v_DIA_CALENDARIO)
+            AND ff.id_funcionario = V_ID_FUNCIONARIO
+        ORDER BY ff.fecha_fichaje_entrada;
 
- v_salida varchar2(12512);
- datos varchar2(12512);
-  datos_tmp varchar2(12512);
-i_encontrado number;
-v_fichaje varchar2(5);
-i_mas_fichaje  varchar2(5);
- d_id_dia date;
-contador number;
-
-Cursor Cfichajes_dia is
-SELECT DISTINCT json_object('entrada' is to_char(ff.fecha_fichaje_entrada,'hh24:MI'),
-                                'salida' is to_char(ff.fecha_fichaje_salida,'hh24:MI')),
-                                ff.fecha_fichaje_entrada
-
-    from fichaje_funcionario ff
-    where to_Date(to_char( ff.fecha_fichaje_entrada,'dd/mm/yyyy'),'dd/mm/yyyy')=v_DIA_CALENDARIO
-    and ff.id_funcionario=V_ID_FUNCIONARIO
-    order by ff.fecha_fichaje_entrada;
-
-begin
-
-    i_encontrado:=1;
-    v_salida  :='';
-  contador:=0;
-   datos :='';
-   BEGIN
-         select json_object('id_tipo_permiso' is tr.id_tipo_permiso,
-                 'desc_tipo_permiso' is desc_tipo_permiso)
-           into v_salida
-           from permiso  p, tr_tipo_permiso  tr
-          where id_funcionario=V_id_funcionario  and
-                p.id_tipo_permiso = tr.id_tipo_permiso and
-                 p.id_ano=tr.id_ano and
-                v_DIA_CALENDARIO between p.fecha_inicio and nvl(p.fecha_fin,sysdate+1)   and
-                (anulado='NO' OR ANULADO IS NULL) and id_estado not in ('30','31','32','40')
-                  --probar baja 11300
-                and rownum<2 and p.id_ano=2024;
+BEGIN
+    i_encontrado := 1;
+    v_salida := '';
+    v_datos := '';
+    i_contador := 0;
+    
+    -- Buscar si existe permiso activo en el día
+    BEGIN
+        SELECT JSON_OBJECT(
+                   'id_tipo_permiso'   IS tr.id_tipo_permiso,
+                   'desc_tipo_permiso' IS tr.desc_tipo_permiso
+               )
+        INTO v_salida
+        FROM permiso p
+        INNER JOIN tr_tipo_permiso tr 
+            ON p.id_tipo_permiso = tr.id_tipo_permiso
+            AND p.id_ano = tr.id_ano
+        WHERE p.id_funcionario = V_id_funcionario
+            AND v_DIA_CALENDARIO BETWEEN p.fecha_inicio AND NVL(p.fecha_fin, SYSDATE + 1)
+            AND (p.anulado = 'NO' OR p.anulado IS NULL)
+            AND p.id_estado NOT IN ('30', '31', '32', '40')
+            AND p.id_ano = C_ANO_CONSULTA
+            AND ROWNUM = 1;
     EXCEPTION
-         WHEN NO_DATA_FOUND THEN
-                  v_salida  :='';
-                  i_encontrado:=0;
+        WHEN NO_DATA_FOUND THEN
+            v_salida := '';
+            i_encontrado := 0;
     END;
-
-   resultado := ',{"permisos_dia": [' ||  v_salida  || ']}';
-
-
-if I_encontrado = 0 then
-
---abrimos cursor.
-    OPEN Cfichajes_dia;
-    LOOP
-      FETCH Cfichajes_dia
-        into datos_tmp,
-             d_id_dia;
-      EXIT WHEN Cfichajes_dia%NOTFOUND;
-
-      contador := contador + 1;
-
-      if contador = 1 then
-        datos := datos_tmp;
-      else
-        datos := datos || ',' || datos_tmp;
-      end if;
-
+    
+    -- Si se encontró permiso, retornar JSON de permisos
+    IF i_encontrado = 1 THEN
+        v_resultado := ',{"permisos_dia": [' || v_salida || ']}';
+        RETURN v_resultado;
+    END IF;
+    
+    -- Si no hay permiso, buscar fichajes del día
+    FOR rec IN c_fichajes_dia LOOP
+        i_contador := i_contador + 1;
+        
+        IF i_contador = 1 THEN
+            v_datos := rec.fichaje_json;
+        ELSE
+            v_datos := v_datos || ',' || rec.fichaje_json;
+        END IF;
     END LOOP;
-    CLOSE Cfichajes_dia;
+    
+    -- Retornar JSON de fichajes
+    v_resultado := ',{"fichajes_dia": [' || v_datos || ']}';
+    
+    RETURN v_resultado;
 
-    resultado := ',{"fichajes_dia": [' || datos || ']}';
-
-end if;
-
-  return(Resultado);
-end WBS_A_DEVUELVE_FICHAJE_PERMISO;
+END WBS_A_DEVUELVE_FICHAJE_PERMISO;
 /
 

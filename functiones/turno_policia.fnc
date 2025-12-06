@@ -1,203 +1,208 @@
-create or replace function rrhh.TURNO_POLICIA(V_claveomesa in varchar2, i_pin varchar2)  return varchar2 is
+/*******************************************************************************
+ * Función: TURNO_POLICIA
+ * 
+ * Propósito:
+ *   Determina el turno de trabajo (mañana=1, tarde=2, noche=3) de un policía
+ *   basándose en los fichajes anteriores y posteriores más cercanos.
+ *
+ * @param V_claveomesa  Número de serie del fichaje a analizar
+ * @param i_pin         PIN del funcionario
+ * @return VARCHAR2     Código del turno: '1'=mañana, '2'=tarde, '3'=noche, '0'=no determinable
+ *
+ * Lógica:
+ *   1. Busca el fichaje correspondiente al numserie dado
+ *   2. Localiza el fichaje anterior y posterior más cercano del mismo funcionario
+ *   3. Determina si el fichaje actual es el primero o segundo del turno
+ *      basándose en los intervalos de tiempo
+ *   4. Obtiene los periodos obligatorios de la jornada del funcionario
+ *   5. Compara las horas de fichaje con los periodos para determinar el turno
+ *
+ * Dependencias:
+ *   - Tabla: fichaje_funcionario_tran (numserie, fecha_fichaje, id_funcionario, pin, valido)
+ *   - Función: finger_busca_jornada_fun (obtiene periodos de jornada)
+ *
+ * Mejoras aplicadas:
+ *   - Documentación JavaDoc completa
+ *   - Constantes para valores de turno y umbrales de tiempo
+ *   - Eliminación de código comentado extenso
+ *   - Variables con nombres más descriptivos
+ *   - INNER JOIN explícito en lugar de sintaxis con comas
+ *   - Simplificación de lógica con CASE
+ *   - Comentarios explicativos en secciones complejas
+ *
+ * Historial:
+ *   - 06/12/2025: Optimización Grupo 8 - mejor legibilidad y documentación
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.TURNO_POLICIA(
+    V_claveomesa IN VARCHAR2,
+    i_pin        IN VARCHAR2
+) RETURN VARCHAR2 IS
 
-Result varchar2(512);
-
-
-i_encontrado number;
-i_encontrado_ant number;
-i_encontrado_pos number;
-
-d_fecha_fichaje date;
-d_fecha_fichaje_ant date;
-d_fecha_fichaje_pos date;
-
-
-i_diferencia_saldo_ant number;
-i_diferencia_saldo_pos number;
-i_id_funcionario number;
-horas_f number;
-horas_f_ant number;
-horas_f_pos number;
-horas_f_pri number;
-horas_f_seg number;
- i_fichaje number;
-  i_p1d           number;
-   i_p1h            number;
-   i_p2d            number;
-   i_p2h            number;
-   i_p3d            number;
-   i_p3h            number;
-   i_po1d           number;
-   i_po1h            number;
-   i_po2d            number;
-   i_po2h            number;
-   i_po3d            number;
-   i_po3h            number;
-   I_SIN_CALENDARIO number;
-
-   v_FICHAJE        varchar2(10);
-   v_fichaje_aux   varchar2(10);
-
-   v_turno_a    number;
-   v_turno_b    number;
-
-
-   v_turno_c    number;
-   v_turno_d    number;
-
-   p_sector   number;
-   s_sector   number;
-   t_sector   number;
-   i_po3h_aux number;
-
-   horas_f_seg_aux number;
-
-   i_contar_comida  number;
-  i_libre number;
-  i_turnos  number;
-begin
-
-    i_encontrado:=1;
-
-    --Buscamos transaccion
+    -- Constantes para turnos
+    C_TURNO_MANANA CONSTANT NUMBER := 1;
+    C_TURNO_TARDE  CONSTANT NUMBER := 2;
+    C_TURNO_NOCHE  CONSTANT NUMBER := 3;
+    C_TURNO_ERROR  CONSTANT NUMBER := 0;
+    
+    -- Constante para ajuste de tolerancia noche
+    C_TOLERANCIA_NOCHE CONSTANT NUMBER := 300;
+    C_AJUSTE_MEDIANOCHE CONSTANT NUMBER := 2000;
+    
+    -- Variables de resultado
+    v_resultado VARCHAR2(512);
+    
+    -- Variables de control de búsqueda
+    i_encontrado     NUMBER;
+    i_encontrado_ant NUMBER;
+    i_encontrado_pos NUMBER;
+    
+    -- Variables de fechas y horas
+    d_fecha_fichaje     DATE;
+    d_fecha_fichaje_ant DATE;
+    d_fecha_fichaje_pos DATE;
+    
+    horas_f     NUMBER;
+    horas_f_ant NUMBER;
+    horas_f_pos NUMBER;
+    horas_f_pri NUMBER;  -- Hora del primer fichaje del par
+    horas_f_seg NUMBER;  -- Hora del segundo fichaje del par
+    horas_f_seg_aux NUMBER;
+    
+    -- Variables de diferencias de tiempo (en minutos)
+    i_diferencia_saldo_ant NUMBER;
+    i_diferencia_saldo_pos NUMBER;
+    
+    -- Variable del funcionario
+    i_id_funcionario NUMBER;
+    
+    -- Indicador de posición: 1=posterior, 2=anterior
+    i_fichaje NUMBER;
+    
+    -- Variables de periodos obligatorios de jornada
+    i_p1d  NUMBER;  -- Periodo 1 desde (flexible)
+    i_p1h  NUMBER;  -- Periodo 1 hasta (flexible)
+    i_p2d  NUMBER;  -- Periodo 2 desde (flexible)
+    i_p2h  NUMBER;  -- Periodo 2 hasta (flexible)
+    i_p3d  NUMBER;  -- Periodo 3 desde (flexible)
+    i_p3h  NUMBER;  -- Periodo 3 hasta (flexible)
+    i_po1d NUMBER;  -- Periodo 1 desde (obligatorio)
+    i_po1h NUMBER;  -- Periodo 1 hasta (obligatorio)
+    i_po2d NUMBER;  -- Periodo 2 desde (obligatorio)
+    i_po2h NUMBER;  -- Periodo 2 hasta (obligatorio)
+    i_po3d NUMBER;  -- Periodo 3 desde (obligatorio)
+    i_po3h NUMBER;  -- Periodo 3 hasta (obligatorio)
+    i_po3h_aux NUMBER;
+    
+    i_sin_calendario NUMBER;
+    i_contar_comida  NUMBER;
+    i_libre          NUMBER;
+    i_turnos         NUMBER;
+BEGIN
+    i_encontrado := 1;
+    
+    -- Buscar el fichaje actual por numserie
     BEGIN
-        select     FECHA_FICHAJE,id_funcionario,to_char(fecha_fichaje,'hh24mi') as horas_f
-                   into d_fecha_fichaje,i_id_funcionario,horas_f
-        from   fichaje_funcionario_tran
-       where   numserie=v_claveomesa and rownum<2 and valido=1
-                 and pin= i_pin;
+        SELECT fecha_fichaje,
+               id_funcionario,
+               TO_NUMBER(TO_CHAR(fecha_fichaje, 'HH24MI')) AS horas_f
+        INTO d_fecha_fichaje, i_id_funcionario, horas_f
+        FROM fichaje_funcionario_tran
+        WHERE numserie = v_claveomesa
+            AND ROWNUM = 1
+            AND valido = 1
+            AND pin = i_pin;
     EXCEPTION
-         WHEN NO_DATA_FOUND THEN
-
-                  i_encontrado:=0;
+        WHEN NO_DATA_FOUND THEN
+            i_encontrado := 0;
     END;
-
-
-    IF  i_encontrado = 1 THEN
-
-       i_encontrado_ant:=1;
-       ----Buscamos transaccion_anterior
-      BEGIN
-        select     FECHA_FICHAJE,to_char(fecha_fichaje,'hh24mi') as horas_f
-                   into d_fecha_fichaje_ant,horas_f_ant
-        from   fichaje_funcionario_tran t ,
-        (select max(numserie) as numserie from fichaje_funcionario_tran  where
-           numserie<v_claveomesa and pin= i_pin and valido=1) p
-       where   t.numserie=p.numserie and rownum<2
-                 and pin= i_pin;
-       EXCEPTION
-       WHEN NO_DATA_FOUND THEN
-
-                i_encontrado_pos:=0;
-       END;
-
-        i_encontrado_pos:=1;
-       ----Buscamos transaccion_posterior
-       BEGIN
-        select     FECHA_FICHAJE,to_char(fecha_fichaje,'hh24mi') as horas_f
-                   into d_fecha_fichaje_pos,horas_f_pos
-        from   fichaje_funcionario_tran t ,
-        (select min(numserie) as numserie from fichaje_funcionario_tran  where
-           numserie>v_claveomesa and pin= i_pin and valido=1) p
-       where   t.numserie=p.numserie and rownum<2
-                 and pin= i_pin;
-       EXCEPTION
-       WHEN NO_DATA_FOUND THEN
-
-                i_encontrado_pos:=0;
-       END;
-
-       i_diferencia_saldo_ant:=0;
-       i_diferencia_saldo_pos:=0;
-       i_fichaje:=1;
-
-
-       IF  i_encontrado_ant = 1 then
-              i_diferencia_saldo_ant:=(d_fecha_fichaje - d_fecha_fichaje_ant)*60*24;
-       END IF;
-
-       IF  i_encontrado_pos = 1 then
-              i_diferencia_saldo_pos:=(d_fecha_fichaje_pos - d_fecha_fichaje)*60*24;
-       END IF;
-
-        IF i_diferencia_saldo_ant =0  THEN
-           i_fichaje:=1;
-       END IF;
-
-       IF i_diferencia_saldo_pos =0  THEN
-           i_fichaje:=2;
-       END IF;
-
-       IF i_diferencia_saldo_ant > i_diferencia_saldo_pos  AND
-           i_diferencia_saldo_pos > 0 THEN
-            --FICHAJE_POSTERIOR--->
-             i_fichaje:=1;
-           ELSE IF i_diferencia_saldo_ant < i_diferencia_saldo_pos  AND
-                      i_diferencia_saldo_ant > 0 then
-                       --FICHAJE_ANTERIOR--->
-                       i_fichaje:=2;
-           END IF;
-
-       END IF;
-
-       -- DESCARTAR_ESTA
-       IF i_diferencia_saldo_ant =0 and  i_diferencia_saldo_pos    =0 THEN
-           i_fichaje:=0;
-           result:=i_fichaje;
-           return(Result);
-       END IF;
-
-
-       --buscamos periodo del fichaje
-
-         finger_busca_jornada_fun(i_id_funcionario,
-                                         D_fecha_fichaje,
-                                         i_p1d,
-                                         i_p1h,
-                                         i_p2d,
-                                         i_p2h,
-                                         i_p3d,
-                                         i_p3h,
-                                         i_po1d,
-                                         i_po1h,
-                                         i_po2d,
-                                         i_po2h,
-                                         i_po3d,
-                                         i_po3h,
-                                         i_contar_comida,
-                                         i_libre,i_turnos,
-                                         i_sin_calendario);
-            /*     BEGIN
-                   select to_char(p1_fle_desde,'hh24mi') as p1d,
-                          to_char(p1_fle_hasta,'hh24mi') as p1h,
-                          to_char(p2_fle_desde,'hh24mi') as p2d,
-                          to_char(p2_fle_hasta,'hh24mi') as p2h,
-                          to_char(p3_fle_desde,'hh24mi') as p3d,
-                          to_char(p3_fle_hasta,'hh24mi') as p3h,
-                          to_char(p1_obl_desde,'hh24mi') as po1d,
-                          to_char(p1_obl_hasta,'hh24mi') as po1h,
-                          to_char(p2_obl_desde,'hh24mi') as po2d,
-                          to_char(p2_obl_hasta,'hh24mi') as po2h,
-                          to_char(p3_obl_desde,'hh24mi') as po3d,
-                          to_char(p3_obl_hasta,'hh24mi') as po3h
-                    into  i_p1d,i_p1h,
-                          i_p2d,i_p2h,
-                          i_p3d,i_p3h ,
-                          i_po1d,i_po1h,
-                          i_po2d,i_po2h,
-                          i_po3d,i_po3h
-                   from FICHAJE_CALENDARIO_JORNADA t, fichaje_funcionario_jornada ff
-                   where t.id_calendario=ff.id_calendario and
-                         id_funcionario=I_id_funcionario and
-                         dia=DECODE(to_char(D_fecha_fichaje,'d'),1,8, to_char(D_fecha_fichaje,'d')) AND
-                         to_date('01/01/2018','DD/mm/YYYY') between ff.fecha_inicio  and
-                                                              nvl(ff.fecha_fin,sysdate+1) AND
-                          to_date('01/01/2018','DD/mm/YYYY') between t.fecha_inicio  and
-                                                                nvl(t.fecha_fin,sysdate+1);
-                 EXCEPTION
-                 WHEN NO_DATA_FOUND THEN
-                      I_SIN_CALENDARIO :=0;
-                 END;  */
+    
+    -- Si no se encontró el fichaje, retornar error
+    IF i_encontrado = 0 THEN
+        RETURN TO_CHAR(C_TURNO_ERROR);
+    END IF;
+    
+    -- Buscar fichaje anterior más cercano
+    i_encontrado_ant := 1;
+    BEGIN
+        SELECT t.fecha_fichaje,
+               TO_NUMBER(TO_CHAR(t.fecha_fichaje, 'HH24MI')) AS horas_f
+        INTO d_fecha_fichaje_ant, horas_f_ant
+        FROM fichaje_funcionario_tran t
+        INNER JOIN (
+            SELECT MAX(numserie) AS numserie
+            FROM fichaje_funcionario_tran
+            WHERE numserie < v_claveomesa
+                AND pin = i_pin
+                AND valido = 1
+        ) p ON t.numserie = p.numserie
+        WHERE t.pin = i_pin
+            AND ROWNUM = 1;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            i_encontrado_ant := 0;
+    END;
+    
+    -- Buscar fichaje posterior más cercano
+    i_encontrado_pos := 1;
+    BEGIN
+        SELECT t.fecha_fichaje,
+               TO_NUMBER(TO_CHAR(t.fecha_fichaje, 'HH24MI')) AS horas_f
+        INTO d_fecha_fichaje_pos, horas_f_pos
+        FROM fichaje_funcionario_tran t
+        INNER JOIN (
+            SELECT MIN(numserie) AS numserie
+            FROM fichaje_funcionario_tran
+            WHERE numserie > v_claveomesa
+                AND pin = i_pin
+                AND valido = 1
+        ) p ON t.numserie = p.numserie
+        WHERE t.pin = i_pin
+            AND ROWNUM = 1;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            i_encontrado_pos := 0;
+    END;
+    
+    -- Calcular diferencias de tiempo en minutos
+    i_diferencia_saldo_ant := CASE WHEN i_encontrado_ant = 1 
+        THEN (d_fecha_fichaje - d_fecha_fichaje_ant) * 60 * 24 
+        ELSE 0 END;
+    
+    i_diferencia_saldo_pos := CASE WHEN i_encontrado_pos = 1 
+        THEN (d_fecha_fichaje_pos - d_fecha_fichaje) * 60 * 24 
+        ELSE 0 END;
+    
+    -- Determinar si este es el primer o segundo fichaje del turno
+    i_fichaje := CASE
+        WHEN i_diferencia_saldo_ant = 0 THEN C_TURNO_MANANA  -- Sin anterior, es primer fichaje
+        WHEN i_diferencia_saldo_pos = 0 THEN C_TURNO_TARDE   -- Sin posterior, es segundo fichaje
+        WHEN i_diferencia_saldo_ant > i_diferencia_saldo_pos AND i_diferencia_saldo_pos > 0 
+            THEN C_TURNO_MANANA  -- Más cerca del posterior
+        WHEN i_diferencia_saldo_ant < i_diferencia_saldo_pos AND i_diferencia_saldo_ant > 0 
+            THEN C_TURNO_TARDE   -- Más cerca del anterior
+        ELSE C_TURNO_MANANA
+    END;
+    
+    -- Descartar si no hay fichajes válidos antes ni después
+    IF i_diferencia_saldo_ant = 0 AND i_diferencia_saldo_pos = 0 THEN
+        RETURN TO_CHAR(C_TURNO_ERROR);
+    END IF;
+    
+    -- Obtener periodos de jornada del funcionario
+    finger_busca_jornada_fun(
+        i_id_funcionario,
+        d_fecha_fichaje,
+        i_p1d,  i_p1h,
+        i_p2d,  i_p2h,
+        i_p3d,  i_p3h,
+        i_po1d, i_po1h,
+        i_po2d, i_po2h,
+        i_po3d, i_po3h,
+        i_contar_comida,
+        i_libre,
+        i_turnos,
+        i_sin_calendario
+    );
 
 
 
@@ -317,14 +322,9 @@ begin
 
 
 
+    -- Si no se pudo determinar el turno, retornar 0
+    RETURN TO_CHAR(C_TURNO_ERROR);
 
-
-
-  END IF;
-   result:=0;
-       return(Result);
-
-  return(Result);
-end TURNO_POLICIA;
+END TURNO_POLICIA;
 /
 
