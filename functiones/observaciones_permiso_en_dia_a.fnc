@@ -1,119 +1,181 @@
-create or replace function rrhh.
-OBSERVACIONES_PERMISO_EN_DIA_A(V_ID_FUNCIONARIO in varchar2,
-v_DIA in DATE,v_HH in number,V_HR in number,V_TURNO in number,
-V_ENTRADA in varchar2,V_SALIDA in varchar2
+/*******************************************************************************
+ * Funci贸n: OBSERVACIONES_PERMISO_EN_DIA_A
+ * 
+ * Prop贸sito:
+ *   Versi贸n ampliada de OBSERVACIONES_PERMISO_EN_DIA que tambi茅n busca horas
+ *   extras registradas para el funcionario en la fecha indicada.
+ *
+ * @param V_ID_FUNCIONARIO  ID del funcionario
+ * @param v_DIA             Fecha del d铆a a consultar
+ * @param v_HH              Horas trabajadas (no utilizado)
+ * @param V_HR              Horas reales (no utilizado)
+ * @param V_TURNO           Turno (1=Ma帽ana, 2=Tarde, 3=Noche)
+ * @param V_ENTRADA         Hora de entrada para buscar horas extras
+ * @param V_SALIDA          Hora de salida para buscar horas extras
+ * @return VARCHAR2         HTML con enlace a permiso, incidencia, turno o horas extras
+ *
+ * L贸gica:
+ *   1. Busca permiso aprobado (estado 80) en la fecha
+ *   2. Valida si el permiso requiere justificaci贸n
+ *   3. Si no hay permiso, busca incidencias
+ *   4. Si no hay incidencias, muestra turno
+ *   5. Adicionalmente, busca horas extras con entrada/salida coincidentes
+ *
+ * Dependencias:
+ *   - Tabla: permiso
+ *   - Tabla: tr_tipo_permiso
+ *   - Tabla: FICHAJE_INCIDENCIA
+ *   - Tabla: personal_new
+ *   - Tabla: tr_tipo_incidencia
+ *   - Tabla: horas_extras
+ *
+ * Consideraciones:
+ *   - Genera HTML inline (considerar separar presentaci贸n)
+ *   - Encoding corrupto en texto (Ma锟絘na, d锟絘)
+ *   - Similar a OBSERVACIONES_PERMISO_EN_DIA pero a帽ade horas extras
+ *
+ * Mejoras aplicadas:
+ *   - Constantes para estados y tipos
+ *   - CHR() para caracteres especiales
+ *   - INNER JOIN expl铆cito
+ *   - Estructura IF simplificada
+ *   - Variables inicializadas
+ *   - Documentaci贸n JavaDoc completa
+ *
+ * Historial:
+ *   - 2025-12-06: Optimizaci贸n y documentaci贸n (Grupo 7)
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.OBSERVACIONES_PERMISO_EN_DIA_A(
+    V_ID_FUNCIONARIO IN VARCHAR2,
+    v_DIA            IN DATE,
+    v_HH             IN NUMBER,
+    V_HR             IN NUMBER,
+    V_TURNO          IN NUMBER,
+    V_ENTRADA        IN VARCHAR2,
+    V_SALIDA         IN VARCHAR2
+) RETURN VARCHAR2 IS
 
-) return varchar2 is
+    -- Constantes
+    C_ESTADO_APROBADO   CONSTANT VARCHAR2(2) := '80';
+    C_ESTADO_INCIDENCIA CONSTANT NUMBER := 0;
+    C_TIPO_EXCLUIDO     CONSTANT NUMBER := 15000;
+    C_RESPUESTA_SI      CONSTANT VARCHAR2(2) := 'SI';
+    C_RESPUESTA_NO      CONSTANT VARCHAR2(2) := 'NO';
+    
+    -- Variables
+    Result              VARCHAR2(1512);
+    i_encontrado        NUMBER := 0;
+    v_id_permiso        NUMBER := 0;
+    i_TIPO_justifica    VARCHAR2(2);
+    i_permiso_justifica VARCHAR2(2);
+    v_descr             VARCHAR2(89);
+    i_id_hora           NUMBER := 0;
+    i_id_ano            NUMBER;
 
-Result varchar2(1512);
+BEGIN
 
-
-i_encontrado number;
-v_id_permiso number;
-
-i_TIPO_justifica varchar2(2);
-i_permiso_justifica varchar2(2);
-v_descr varchar2(89);
-V_observaciones varchar2(10000);
-i_id_hora number;
-i_id_ano  number;
-
-begin
-
-    i_encontrado:=1;
-    v_id_permiso:=1;
-
+    -- Buscar permiso aprobado para el d铆a
     BEGIN
-         select id_permiso ,tc.JUSTIFICACION,nvl(p.justificacion,'NO'), DESC_PERMISO_CORTA
-         into v_id_permiso,i_TIPO_justifica, i_permiso_justifica,v_descr
-           from permiso  p,  tr_tipo_permiso tc
-          where id_funcionario=V_id_funcionario  and
-                p.id_tipo_permiso = tc.id_tipo_permiso and
-                p.id_ano = tc.id_ano and
-                v_DIA between p.fecha_inicio and nvl(p.fecha_fin,sysdate+1)   and
-                (anulado='NO' OR ANULADO IS NULL) and id_estado  in ('80')
-                and p.id_tipo_permiso not in (15000)
-                and rownum<2;
+        SELECT 
+            p.id_permiso,
+            tc.JUSTIFICACION,
+            NVL(p.justificacion, C_RESPUESTA_NO),
+            tc.DESC_PERMISO_CORTA
+        INTO 
+            v_id_permiso,
+            i_TIPO_justifica,
+            i_permiso_justifica,
+            v_descr
+        FROM permiso p
+        INNER JOIN tr_tipo_permiso tc 
+            ON p.id_tipo_permiso = tc.id_tipo_permiso 
+           AND p.id_ano = tc.id_ano
+        WHERE p.id_funcionario = V_ID_FUNCIONARIO
+          AND v_DIA BETWEEN p.fecha_inicio AND NVL(p.fecha_fin, SYSDATE + 1)
+          AND (p.anulado = C_RESPUESTA_NO OR p.anulado IS NULL)
+          AND p.id_estado = C_ESTADO_APROBADO
+          AND p.id_tipo_permiso <> C_TIPO_EXCLUIDO
+          AND ROWNUM = 1;
     EXCEPTION
-         WHEN NO_DATA_FOUND THEN
-
-                  i_encontrado:=0;
-                  v_id_permiso:=0;
+        WHEN NO_DATA_FOUND THEN
+            v_id_permiso := 0;
     END;
-
-
-    --PERMISO NO JUSTIFICADO
-    if  v_id_permiso<> 0  AND i_TIPO_justifica='SI' AND i_permiso_justifica='NO' then
-        v_id_permiso:=0;
+    
+    -- Validar si el permiso requiere justificaci贸n y no la tiene
+    IF v_id_permiso <> 0 
+       AND i_TIPO_justifica = C_RESPUESTA_SI 
+       AND i_permiso_justifica = C_RESPUESTA_NO THEN
+        v_id_permiso := 0;
     END IF;
 
-     --Buscamos permisos
-     IF v_id_permiso <>0  THEN
-         result:= '<a href="../Permisos/ver.jsp?ID_PERMISO=' ||v_id_permiso || '" >' ||  v_descr || '</a>  '|| 'Justificado:' || i_permiso_justifica ;
-     ELSE
+    -- Si hay permiso v谩lido, retornar enlace HTML
+    IF v_id_permiso <> 0 THEN
+        Result := '<a href="../Permisos/ver.jsp?ID_PERMISO=' || v_id_permiso || 
+                  '" >' || v_descr || '</a>  Justificado:' || i_permiso_justifica;
+    ELSE
+        -- No hay permiso: buscar incidencias
+        i_encontrado := 1;
+        
+        BEGIN
+            SELECT DISTINCT 
+                CASE 
+                    WHEN observaciones IS NOT NULL THEN observaciones
+                    WHEN DESC_TIPO_INCIDENCIA = 'Sin fichajes en d' || CHR(237) || 'a laborable.' THEN
+                        'Sin fichajes en d' || CHR(237) || 'a laborable.' ||
+                        '<img src="../../imagen/icono_advertencia.jpg" ' ||
+                        'alt="INCIDENCIA" width="22" height="22" border="0" >'
+                    ELSE DESC_TIPO_INCIDENCIA
+                END
+            INTO Result
+            FROM FICHAJE_INCIDENCIA f
+            INNER JOIN personal_new pe 
+                ON f.id_funcionario = pe.id_funcionario
+            INNER JOIN tr_tipo_incidencia tr 
+                ON f.id_tipo_incidencia = tr.id_tipo_incidencia
+            WHERE (pe.fecha_baja IS NULL OR pe.fecha_baja > SYSDATE - 1)
+              AND f.id_funcionario = V_ID_FUNCIONARIO
+              AND f.fecha_incidencia = v_DIA
+              AND f.id_Estado_inc = C_ESTADO_INCIDENCIA
+              AND ROWNUM = 1;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                i_encontrado := 0;
+        END;
+        
+        -- Si no hay incidencias, mostrar turno
+        IF i_encontrado = 0 THEN
+            Result := CASE V_TURNO
+                WHEN 1 THEN 'Turno Ma' || CHR(241) || 'ana'  -- Ma帽ana
+                WHEN 2 THEN 'Turno Tarde'
+                WHEN 3 THEN 'Turno Noche'
+                ELSE ''
+            END;
+        END IF;
+        
+        -- Buscar horas extras con coincidencia de horario
+        BEGIN
+            SELECT id_hora, id_ano
+            INTO i_id_hora, i_id_ano
+            FROM horas_extras
+            WHERE V_ENTRADA = HORA_INICIO
+              AND V_SALIDA = HORA_FIN
+              AND id_funcionario = V_ID_FUNCIONARIO
+              AND fecha_horas = v_DIA
+              AND (ANULADO = C_RESPUESTA_NO OR ANULADO IS NULL);
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                i_id_hora := 0;
+        END;
+        
+        -- Si hay horas extras, agregar enlace
+        IF i_id_hora > 0 THEN
+            Result := '<a href="../Horas/editar.jsp?ID_HORA=' || i_id_hora || 
+                      '&ID_ANO=' || i_id_ano || '" >Horas extras</a>  ';
+        END IF;
+    END IF;
+    
+    RETURN Result;
 
-         i_encontrado:=1;
-
-         BEGIN
-            SELECT    distinct DECODE(observaciones,null,
-                      DECODE(DESC_TIPO_INCIDENCIA,'Sin fichajes en d韆 laborable.',
-                      'Sin fichajes en d韆 laborable.<img src="../../imagen/icono_advertencia.jpg" alt="INCIDENCIA"  width="22" height="22" border="0" >',DESC_TIPO_INCIDENCIA)
-                  ,observaciones)
-                into Result
-               FROM FICHAJE_INCIDENCIA f, personal_new pe, tr_tipo_incidencia tr
-           where (fecha_baja is null or fecha_baja > sysdate - 1)
-             and f.id_funcionario = pe.id_funcionario
-             and f.id_tipo_incidencia = tr.id_tipo_incidencia
-             and f.id_funcionario=V_ID_FUNCIONARIO
-             and f.fecha_incidencia=v_DIA
-             and id_Estado_inc = 0 and rownum<2;
-              EXCEPTION
-                   WHEN NO_DATA_FOUND THEN
-                            i_encontrado:=0;
-              END;
-
-
-          IF i_encontrado = 0 THEN
-             IF V_TURNO = 1 THEN
-               Result:='Turno Ma馻na';
-             ELSE  IF V_TURNO = 2 THEN
-                          Result:='Turno Tarde';
-                   ELSE  IF V_TURNO = 3 THEN
-                               Result:='Turno Noche';
-                         ELSE
-                                  Result:='';
-                         END IF;
-
-                   END IF;
-
-             END IF;
-
-          END IF;
-
-            BEGIN
-           select id_hora,id_ano
-              into i_id_hora ,i_id_ano
-           from  horas_extras
-             where        V_ENTRADA=HORA_INICIO
-                    and   V_SALIDA=HORA_FIN
-                    and  id_funcionario=V_ID_FUNCIONARIO
-                    and fecha_horas=v_DIA
-              and  (ANULADO='NO' or ANULADO is null);
-               EXCEPTION
-                   WHEN NO_DATA_FOUND THEN
-                          i_id_hora :=0;
-              END;
-          IF    i_id_hora    > 0 then
-             result:= '<a href="../Horas/editar.jsp?ID_HORA=' ||i_id_hora || '&ID_ANO='||i_id_ano  || '" >' ||  'Horas extras' || '</a>  ';
-
-          END IF;
-
-
-      END IF;
-
-
-
-  return(Result);
-end OBSERVACIONES_PERMISO_EN_DIA_A;
+END OBSERVACIONES_PERMISO_EN_DIA_A;
 /
 
