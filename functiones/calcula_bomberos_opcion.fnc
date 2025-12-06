@@ -69,8 +69,9 @@ CREATE OR REPLACE FUNCTION rrhh.CALCULA_BOMBEROS_OPCION(
     
 BEGIN
     -- Inicializar resultado
+    -- v_id_permiso_min se inicializa a NULL para consistencia con la logica de comparacion
     v_result := '';
-    v_id_permiso_min := '';
+    v_id_permiso_min := NULL;
     
     -- Verificar si el funcionario tiene permisos de compensacion
     SELECT COUNT(*)

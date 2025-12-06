@@ -11,8 +11,10 @@
  * PARAMETROS:
  *   @param D_FECHA_INICIO (DATE) - Fecha inicio del permiso de vacaciones
  *   @param D_FECHA_FIN (DATE) - Fecha fin del permiso de vacaciones
- *   @param V_TIPO_DIA (VARCHAR2) - Tipo de dia (no utilizado actualmente,
- *                                   reservado para futuras extensiones)
+ *   @param V_TIPO_DIA (VARCHAR2) - Tipo de dia. NOTA: Este parametro se mantiene
+ *                                   por compatibilidad con llamadas existentes pero
+ *                                   no se utiliza actualmente. La funcion siempre
+ *                                   calcula dias laborales ('L').
  *   @param D_INICIO (DATE) - Fecha inicio del periodo permitido
  *   @param D_FIN (DATE) - Fecha fin del periodo permitido
  *
