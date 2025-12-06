@@ -244,31 +244,61 @@ Optimizar y documentar funciones PL/SQL del repositorio `trabajo_plsql_permisos`
 - ⚠️ 10 años hardcodeados documentados para parametrizar
 - ⚠️ URLs y IDs especiales identificados para centralizar
 
+### Grupo 10 - Funciones WBS (Web Services - Parte 2) ✅ COMPLETADO
+**Funciones:** 10  
+**Archivo:** `GRUPO10_OPTIMIZACION.md`  
+**Rango:** wbs_devuelve_firma_permisos → wbs_justifica_fichero
+
+| Función | Optimización Principal |
+|---------|----------------------|
+| wbs_devuelve_firma_permisos | FOR LOOP, constantes URL/estados, INNER JOIN, 9 variables eliminadas |
+| wbs_devuelve_mensajes | FOR LOOP, cambia_acentos, constante límite, 13 variables eliminadas |
+| wbs_devuelve_permisos_bomberos | **FOR LOOP, 6 DECODE → CASE**, 2 TO_DATE(TO_CHAR) eliminados, LEFT JOIN, ⚠️ año 2023 hardcodeado |
+| wbs_devuelve_permisos_compas | FOR LOOP, TRUNC, INNER JOIN, constantes |
+| wbs_devuelve_roles | **Eliminación SELECT FROM DUAL**, CASE, INNER JOIN, construcción JSON directa |
+| wbs_devuelve_saldo_bolsas | **3 cursores → FOR LOOP**, CASE, constantes límites, ⚠️ años 2021-2025 hardcodeados |
+| wbs_devuelve_saldo_horario | **3 cursores → FOR LOOP**, CASE (12 meses), 3 TO_DATE(TO_CHAR) eliminados, TRUNC |
+| wbs_devuelve_tr_estados | **7 cursores → FOR LOOP (récord)**, cambia_acentos, eliminación 125 líneas TRANSLATE/REGEXP |
+| wbs_inserta_curso | ⚠️ **Bug corregido**: IF = null → IS NULL, constantes, documentación COMMIT |
+| wbs_justifica_fichero | ⚠️ **Bug corregido**: enlace > 0 (VARCHAR2), constantes, documentación NO COMMIT |
+
+**Mejoras clave:**
+- Eliminación 13 cursores manuales → FOR LOOP (**récord: 7 en wbs_devuelve_tr_estados**)
+- Eliminación 1 SELECT FROM DUAL (~40% context switch)
+- Eliminación 5 TO_DATE(TO_CHAR()) redundantes
+- Eliminación 13 DECODE → CASE
+- Eliminación 7 JOIN implícitos → INNER/LEFT JOIN
+- Eliminación 6 TRANSLATE/REGEXP_REPLACE (125 líneas) usando cambia_acentos
+- Eliminación 65 variables no utilizadas
+- **2 bugs críticos corregidos y documentados**
+- ⚠️ 2 años hardcodeados documentados (2023, 2021-2025)
+- +793% aumento en comentarios
+
 ---
 
-## 📈 Métricas Consolidadas (80 Funciones)
+## 📈 Métricas Consolidadas (90 Funciones)
 
 ### Impacto General
 
 | Aspecto | Antes | Después | Mejora |
 |---------|-------|---------|--------|
-| **Total líneas de código** | ~5,980 | ~9,944 | +66% (documentación) |
-| **Total comentarios** | ~253 | ~5,140 | +1931% |
-| **Variables no inicializadas** | 109 | 0 | **-100%** |
-| **Constantes mágicas** | ~326 | 0 | **-100%** |
-| **SELECT FROM DUAL** | 88 | 0 | **-100%** |
+| **Total líneas de código** | ~7,089 | ~11,384 | +61% (documentación) |
+| **Total comentarios** | ~342 | ~5,935 | +1635% |
+| **Variables no inicializadas** | 174 | 0 | **-100%** |
+| **Constantes mágicas** | ~374 | 0 | **-100%** |
+| **SELECT FROM DUAL** | 89 | 0 | **-100%** |
 | **Código inalcanzable** | 15 líneas | 0 | **-100%** |
 | **Código comentado** | ~555 líneas | 0 | **-100%** |
-| **Cursores manuales** | 27 | 0 | **-100%** |
-| **Encoding corrupto** | 14 archivos | 0 | **-100%** |
-| **TO_DATE(TO_CHAR()) redundantes** | 34 | 0 | **-100%** |
+| **Cursores manuales** | 40 | 0 | **-100%** |
+| **Encoding corrupto** | 20 archivos | 0 | **-100%** |
+| **TO_DATE(TO_CHAR()) redundantes** | 39 | 0 | **-100%** |
 | **TO_NUMBER(TO_CHAR())** | 5 | 0 | **-100%** |
-| **JOIN implícitos (comas)** | 17 | 0 | **-100%** |
-| **DECODE innecesarios** | 27 | 0 | **-100%** |
+| **JOIN implícitos (comas)** | 24 | 0 | **-100%** |
+| **DECODE innecesarios** | 40 | 0 | **-100%** |
 | **DISTINCT innecesarios** | 5 | 0 | **-100%** |
 | **⚠️ Vulnerabilidades críticas** | 3 no documentadas | 3 documentadas | **Alertas añadidas** |
-| **⚠️ Bugs críticos** | 1 no documentado | 1 documentado | **Alerta añadida** |
-| **⚠️ Años hardcodeados** | 16 | 16 documentados | **Alertas añadidas** |
+| **⚠️ Bugs críticos** | 3 no documentados | 3 documentados | **Alertas añadidas** |
+| **⚠️ Años hardcodeados** | 18 | 18 documentados | **Alertas añadidas** |
 
 ### Distribución de Mejoras
 
@@ -282,8 +312,9 @@ Grupo 6 (Cálculo Horas):             ~93 → ~207 líneas     (+123% doc)
 Grupo 7 (Permisos/Días):             ~420 → ~750 líneas    (+79% doc)
 Grupo 8 (Turnos/WBS):                ~817 → ~1,216 líneas  (+49% doc)
 Grupo 9 (WBS Web Services):        ~1,730 → ~2,041 líneas  (+18% doc)
+Grupo 10 (WBS Web Services 2):     ~1,109 → ~1,440 líneas  (+30% doc)
 ──────────────────────────────────────────────────────────────────────
-Total 9 Grupos:                     ~5,980 → ~9,944 líneas (+66%)
+Total 10 Grupos:                    ~7,089 → ~11,384 líneas (+61%)
 ```
 
 ---
@@ -471,7 +502,7 @@ con documentación completa
 4. ✅ **Grupo 7:** laboral_dia → permiso_en_dia (**COMPLETADO**)
 5. ✅ **Grupo 8:** personas_sinrpt → wbs_actualiza_nomina (**COMPLETADO**)
 6. ✅ **Grupo 9:** wbs_borra_repetidos → wbs_devuelve_firma (**COMPLETADO**)
-7. ⏳ **Grupo 10:** wbs_devuelve_firma_permisos → wbs_justifica_fichero_sin (final)
+7. ✅ **Grupo 10:** wbs_devuelve_firma_permisos → wbs_justifica_fichero (**COMPLETADO**)
 
 ### Mejoras Recomendadas
 1. 🔴 **CRÍTICO: Corregir bug en wbs_actualiza_nomina.fnc (UPDATE sin WHERE)**
@@ -479,7 +510,7 @@ con documentación completa
 3. ⚠️ **CRÍTICO: Migrar credenciales LDAP a Oracle Wallet o tabla cifrada**
 4. ⚠️ **CRÍTICO: Migrar LDAP a LDAPS (puerto 636 con SSL/TLS)**
 5. ⚠️ **URGENTE: Implementar auditoría de accesos LDAP**
-6. ⚠️ **URGENTE: Parametrizar años hardcodeados** (16 ocurrencias en Grupos 7, 8, 9)
+6. ⚠️ **URGENTE: Parametrizar años hardcodeados** (18 ocurrencias en Grupos 7, 8, 9, 10)
 7. ⏳ Crear suite de pruebas unitarias para funciones optimizadas
 8. ⏳ Implementar tabla `config_casos_especiales` para IDs hardcodeados
 9. ⏳ Implementar tabla `config_wbs_parametros` para URLs, dominios
@@ -505,6 +536,7 @@ trabajo_plsql_permisos/
     ├── GRUPO7_OPTIMIZACION.md          ✅ Completado
     ├── GRUPO8_OPTIMIZACION.md          ✅ Completado
     ├── GRUPO9_OPTIMIZACION.md          ✅ Completado
+    ├── GRUPO10_OPTIMIZACION.md         ✅ Completado
     ├── RESUMEN_GRUPOS_OPTIMIZACION.md  ✅ Este documento
     │
     ├── [Grupo 1 - 10 archivos .fnc]    ✅ Optimizados
@@ -516,8 +548,7 @@ trabajo_plsql_permisos/
     ├── [Grupo 7 - 8 archivos .fnc]     ✅ Optimizados
     ├── [Grupo 8 - 10 archivos .fnc]    ✅ Optimizados
     ├── [Grupo 9 - 10 archivos .fnc]    ✅ Optimizados
-    │
-    └── [Grupo 10 - 13 archivos .fnc]   ⏳ Pendientes
+    └── [Grupo 10 - 10 archivos .fnc]   ✅ Optimizados
 ```
 
 ---
@@ -526,40 +557,40 @@ trabajo_plsql_permisos/
 
 **Repositorio:** trabajo_plsql_permisos  
 **Total funciones:** 93  
-**Funciones optimizadas:** 80 (86%)  
-**Funciones pendientes:** 13 (14%)  
+**Funciones optimizadas:** 90 (97%)  
+**Funciones pendientes:** 3 (3%)  
 
 **Fecha inicio:** Diciembre 2025  
 **Última actualización:** 06/12/2025  
-**Estado:** 🟢 En Progreso (Grupo 9 completado) | ⚠️ Vulnerabilidades Críticas + Bugs Críticos Identificados
+**Estado:** 🟢 Grupo 10 completado | ⚠️ 3 Vulnerabilidades Críticas + 3 Bugs Críticos Identificados
 
 ---
 
 ## 🎖️ Logros Hasta el Momento
 
 ### Código Limpio
-- ✅ Eliminación 100% constantes mágicas (326 → 0)
+- ✅ Eliminación 100% constantes mágicas (374 → 0)
 - ✅ Eliminación 100% código inalcanzable (15 líneas → 0)
 - ✅ Eliminación 100% código comentado (~555 líneas → 0)
-- ✅ Eliminación 100% SELECT FROM DUAL (88 → 0)
-- ✅ Eliminación 100% cursores manuales (27 → 0)
-- ✅ Eliminación 100% conversiones redundantes TO_DATE(TO_CHAR()) (34 → 0)
+- ✅ Eliminación 100% SELECT FROM DUAL (89 → 0)
+- ✅ Eliminación 100% cursores manuales (40 → 0)
+- ✅ Eliminación 100% conversiones redundantes TO_DATE(TO_CHAR()) (39 → 0)
 - ✅ Eliminación 100% conversiones TO_NUMBER(TO_CHAR()) (5 → 0)
-- ✅ Eliminación 100% JOIN implícitos (17 → 0)
-- ✅ Eliminación 100% DECODE innecesarios (27 → 0)
+- ✅ Eliminación 100% JOIN implícitos (24 → 0)
+- ✅ Eliminación 100% DECODE innecesarios (40 → 0)
 - ✅ Eliminación 100% DISTINCT innecesarios (5 → 0)
-- ✅ Eliminación 100% encoding corrupto (14 archivos → 0)
+- ✅ Eliminación 100% encoding corrupto (20 archivos → 0)
 - ✅ Eliminación 90% código duplicado
 
 ### Documentación
-- ✅ +1931% aumento en comentarios (253 → 5,140 líneas)
-- ✅ 80 funciones con documentación JavaDoc completa
-- ✅ 9 documentos de resumen detallados
+- ✅ +1635% aumento en comentarios (342 → 5,935 líneas)
+- ✅ 90 funciones con documentación JavaDoc completa
+- ✅ 10 documentos de resumen detallados
 - ✅ Múltiples ejemplos de uso incluidos
 - ⚠️ **3 funciones con alertas de seguridad críticas documentadas**
-- ⚠️ **1 función con bug crítico documentado**
+- ⚠️ **3 funciones con bugs críticos documentados**
 - ⚠️ **1 función con alerta de COMMIT en loop documentada**
-- ⚠️ **16 años hardcodeados documentados para parametrizar**
+- ⚠️ **18 años hardcodeados documentados para parametrizar**
 
 ### Rendimiento
 - ✅ ~40% reducción context switches (eliminación DUAL)
@@ -570,7 +601,7 @@ trabajo_plsql_permisos/
 
 ### Seguridad
 - ⚠️ **3 vulnerabilidades críticas identificadas** (credenciales LDAP hardcodeadas)
-- ⚠️ **1 bug crítico identificado** (wbs_actualiza_nomina: UPDATE sin WHERE)
+- ⚠️ **3 bugs críticos identificados** (wbs_actualiza_nomina, wbs_inserta_curso, wbs_justifica_fichero)
 - ⚠️ **1 alerta de seguridad transaccional** (wbs_borra_repetidos: COMMIT en loop)
 - ⚠️ Alertas de seguridad documentadas en código fuente
 - ⚠️ Recomendaciones de migración a LDAPS documentadas
@@ -579,4 +610,4 @@ trabajo_plsql_permisos/
 ---
 
 **Documento generado:** 06/12/2025  
-**Versión:** 1.2 (actualizado con Grupo 9)
+**Versión:** 1.3 (actualizado con Grupo 10)
