@@ -46,6 +46,7 @@
  *   - CASE en lugar de DECODE para mejor legibilidad
  *   - NVL para manejar casos sin datos
  *   - Eliminación de variables no utilizadas (i_resultado)
+ *   - Precálculo de formato de mes para evitar conversiones repetidas en queries
  *   - Comentarios explicativos en cada sección
  *
  * Notas:
@@ -74,12 +75,16 @@ CREATE OR REPLACE FUNCTION RRHH.HORAS_TRAJADAS_MES(
     v_total_minutos   NUMBER := 0;
     v_fecha_inicio    DATE;
     v_fecha_fin       DATE;
+    v_mes_formato     VARCHAR2(2);  -- Mes en formato '01', '02', etc.
     v_resultado       VARCHAR2(100);
     
 BEGIN
     -- Calcular rango de fechas para el año especificado
     v_fecha_inicio := TO_DATE('01/01/' || i_id_Anno, 'DD/MM/YYYY');
     v_fecha_fin    := TO_DATE('01/01/' || (i_id_Anno + 1), 'DD/MM/YYYY');
+    
+    -- Precalcular formato de mes para evitar conversiones repetidas en las consultas
+    v_mes_formato := TO_CHAR(i_MES, 'FM00');
     
     -- Calcular horas trabajadas según tipo de funcionario
     IF ID_TIPO_FUNCIONARIO <> C_TIPO_BOMBERO THEN
@@ -92,7 +97,7 @@ BEGIN
                 ON fc.id_funcionario = f.id_funcionario
             WHERE TRUNC(fc.fecha_fichaje_entrada) BETWEEN v_fecha_inicio 
                                                       AND v_fecha_fin - 1
-              AND (TO_CHAR(fc.fecha_fichaje_entrada, 'MM') = TO_CHAR(i_MES, 'FM00') 
+              AND (TO_CHAR(fc.fecha_fichaje_entrada, 'MM') = v_mes_formato
                    OR i_MES = C_MES_ANUAL)
               AND fc.id_funcionario = i_ID_FUNCIONARIO
               AND (f.fecha_fin_contrato IS NULL 
@@ -121,7 +126,7 @@ BEGIN
                AND b.hasta BETWEEN p.fecha_inicio - 1 AND p.fecha_fin + 1
                AND p.id_estado = C_ESTADO_APROBADO
             WHERE b.hasta BETWEEN v_fecha_inicio AND v_fecha_fin - 1
-              AND (TO_CHAR(b.hasta, 'MM') = TO_CHAR(i_MES, 'FM00') 
+              AND (TO_CHAR(b.hasta, 'MM') = v_mes_formato
                    OR i_MES = C_MES_ANUAL)
               AND b.funcionario = i_ID_FUNCIONARIO;
         EXCEPTION
