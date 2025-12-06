@@ -1,78 +1,75 @@
-create or replace function rrhh.wbs_devuelve_mensajes(i_id_funcionario IN VARCHAR2
-                                                               )
-  return clob is
- 
-  
-  --
-  Resultado    clob;
-  observaciones varchar2(12000);
-
-  saldo_horario       varchar2(123);
-  fichaje_teletrabajo varchar2(123);
-  firma_planificacion varchar2(123);
-  datos              clob;
-  datos_tmp           clob;
-  contador            number;
-  i_mes               number;
-  i_anio              number;
-
-  d_id_dia            date;
-  v_id_funcionario_tt varchar2(123);
-  v_nombres_tt        varchar2(123);
-  v_desc_permiso_tt   varchar2(123);
-  v_anio              varchar2(123);
-  
-  d_datos_fecha_entrada date;
-  
-  --Funcionarios mensajes  
-  CURSOR Cmensajes_funcionario is
-     
-         select distinct  json_object(
-                              --  'id_funcionario' is id_funcionario,
-                                --'id_dia' is to_char(fecha_mensaje,'dd/mm/yyyy'),
-                                'notificacion' is TRANSLATE(REGEXP_REPLACE( mensaje, '[^A-Za-z0-9¡…Õ”⁄·ÈÌÛ˙ ]', ''), 
-                                       'Ò·ÈÌÛ˙‡ËÏÚ˘„ı‚ÍÓÙÙ‰ÎÔˆ¸Á—¡…Õ”⁄¿»Ã“Ÿ√’¬ Œ‘€ƒÀœ÷‹« ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC ')
-                                
-                                )
-                                
-                                , fecha_mensaje
-       
-   from funcionario_mensaje where id_funcionario=i_id_funcionario
-   order by fecha_mensaje desc;
-
-       
-begin
-
-  datos    := '';
-  contador := 0;
- 
-    --abrimos cursor.    
-    OPEN Cmensajes_funcionario;
-    LOOP
-      FETCH Cmensajes_funcionario
-        into datos_tmp,
-             d_id_dia;
-      EXIT WHEN Cmensajes_funcionario%NOTFOUND;
+/*******************************************************************************
+ * Funci√≥n: wbs_devuelve_mensajes
+ * 
+ * Prop√≥sito:
+ *   Devuelve un JSON con las √∫ltimas notificaciones/mensajes de un funcionario,
+ *   limitado a las 4 m√°s recientes.
+ *
+ * @param i_id_funcionario VARCHAR2  ID del funcionario
+ * @return CLOB                      JSON con array de notificaciones
+ *
+ * L√≥gica:
+ *   1. Recupera mensajes del funcionario ordenados por fecha descendente
+ *   2. Limpia caracteres especiales y normaliza acentos usando funci√≥n cambia_acentos
+ *   3. Retorna m√°ximo 4 notificaciones m√°s recientes
+ *
+ * Dependencias:
+ *   - Tabla: funcionario_mensaje (notificaciones del funcionario)
+ *   - Funci√≥n: cambia_acentos (normalizaci√≥n de caracteres especiales)
+ *
+ * Mejoras aplicadas:
+ *   - Conversi√≥n cursor manual ‚Üí FOR LOOP
+ *   - Constante para l√≠mite de mensajes
+ *   - Uso de funci√≥n cambia_acentos en lugar de TRANSLATE/REGEXP_REPLACE
+ *   - Eliminaci√≥n de variables no utilizadas
+ *   - Inicializaci√≥n expl√≠cita de variables
+ *   - Documentaci√≥n JavaDoc completa
+ *
+ * Notas:
+ *   - Limita resultados a 4 mensajes m√°s recientes
+ *   - Los mensajes se ordenan por fecha descendente (m√°s recientes primero)
+ *
+ * Historial:
+ *   - 06/12/2025: Optimizaci√≥n Grupo 10 - Cursor a FOR LOOP, constantes
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.wbs_devuelve_mensajes(
+    i_id_funcionario IN VARCHAR2
+) RETURN CLOB IS
+    -- Constantes
+    C_MAX_MENSAJES        CONSTANT NUMBER := 4;
     
-      contador := contador + 1;
+    -- Variables
+    v_resultado           CLOB;
+    v_datos               CLOB;
+    v_contador            NUMBER := 0;
     
-      if contador = 1 then
-        datos := datos_tmp;
-      else if contador < 5 THEN
-        datos := datos || ',' || datos_tmp;
-            end if; 
-      end if;
+BEGIN
+    v_datos := '';
     
+    -- Itera sobre los mensajes del funcionario, ordenados por fecha descendente
+    FOR rec IN (
+        SELECT DISTINCT
+            JSON_OBJECT(
+                'notificacion' IS cambia_acentos(mensaje)
+            ) AS datos_json,
+            fecha_mensaje
+        FROM funcionario_mensaje
+        WHERE id_funcionario = i_id_funcionario
+        ORDER BY fecha_mensaje DESC
+    ) LOOP
+        v_contador := v_contador + 1;
+        
+        -- Limita a las 4 notificaciones m√°s recientes
+        IF v_contador = 1 THEN
+            v_datos := rec.datos_json;
+        ELSIF v_contador <= C_MAX_MENSAJES THEN
+            v_datos := v_datos || ',' || rec.datos_json;
+        END IF;
     END LOOP;
-    CLOSE Cmensajes_funcionario;
-  
-    resultado := '"notificaciones": [' || datos || ']';
-  
-  
-
-  return(Resultado);
-
-end;
+    
+    v_resultado := '"notificaciones": [' || v_datos || ']';
+    RETURN v_resultado;
+    
+END wbs_devuelve_mensajes;
 /
 
