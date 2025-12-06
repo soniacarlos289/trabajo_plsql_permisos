@@ -370,15 +370,6 @@ trabajo_plsql_permisos/
 **Última actualización:** 06/12/2025  
 **Estado:** 🟢 En Progreso (Grupo 4 completado)
 
-**Repositorio:** trabajo_plsql_permisos  
-**Total funciones:** 91  
-**Funciones optimizadas:** 40 (44%)  
-**Funciones pendientes:** 51 (56%)  
-
-**Fecha inicio:** Diciembre 2025  
-**Última actualización:** 06/12/2025  
-**Estado:** 🟢 En Progreso (Grupo 4 completado)
-
 ---
 
 ## 🎖️ Logros Hasta el Momento

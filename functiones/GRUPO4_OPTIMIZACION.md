@@ -157,7 +157,7 @@ Se han optimizado y documentado las siguientes 10 funciones del directorio `func
 Antes:  2 SELECT separados (MIN y MAX)
 Después: 1 SELECT con MIN y MAX combinados
 
-Mejora estimada: ~50% reducción de accesos a BD
+Mejora estimada: ~50% reducción en número de consultas SQL
 ```
 
 ### devuelve_periodo_fichaje.fnc
@@ -232,8 +232,9 @@ Tiempo de comprensión del código: -60%
 ### Funciones con Limitaciones Identificadas
 
 1. **devuelve_parametro_fecha.fnc**
-   - Conversiones fecha complejas (TO_DATE(TO_CHAR()))
-   - **Recomendación:** Ya optimizado con TRUNC(fecha, 'MM')
+   - Múltiples TO_NUMBER en una misma expresión (CASE con TO_NUMBER(ano) y TO_NUMBER(mes))
+   - **Recomendación:** Podría optimizarse almacenando valores convertidos en variables intermedias
+   - **Nota:** No se modifica para mantener compatibilidad y evitar cambios complejos
 
 2. **devuelve_periodo.fnc**
    - Valor por defecto hardcodeado '012019' como indicador
@@ -247,17 +248,23 @@ Tiempo de comprensión del código: -60%
 4. **diferencia_saldo.fnc**
    - Valores por defecto muy altos (50000, 40000) pueden ocultar errores
    - Rango de fechas hardcodeado (365 días)
-   - **Recomendación:** Parametrizar rango de fechas, usar NVL con 0
+   - TO_CHAR para extraer horas/minutos (podría usar EXTRACT)
+   - **Recomendación:** 
+     - Parametrizar rango de fechas, usar NVL con 0
+     - Considerar EXTRACT(HOUR/MINUTE) en lugar de TO_CHAR (requiere cambio de tipo de dato)
+   - **Nota:** No se modifica TO_CHAR para mantener compatibilidad con tipo de dato existente
 
 5. **extrae_agenda.fnc**
    - Fechas hardcodeadas (2018-2021)
    - COMMIT dentro del loop (no transaccional)
    - HTML parsing manual (frágil)
+   - Malformed HTML tag encontrado en datos: '<u>Convocatoria:,'')'
    - **Recomendación:** 
      - Parametrizar rango de fechas
      - COMMIT al final del proceso
      - Considerar expresiones regulares para HTML
      - Separar en procedure para mejor transaccionalidad
+     - Limpiar datos fuente de HTML malformado
 
 ### Funciones Similares / Duplicadas
 

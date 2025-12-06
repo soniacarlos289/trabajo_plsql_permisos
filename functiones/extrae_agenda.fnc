@@ -71,6 +71,7 @@ RETURN VARCHAR2 IS
     C_TAG_SPAN_CLOSE      CONSTANT VARCHAR2(7) := '</span>';
     C_TAG_U_OPEN          CONSTANT VARCHAR2(3) := '<u>';
     C_TAG_U_CLOSE         CONSTANT VARCHAR2(4) := '</u>';
+    C_MALFORMED_TAG       CONSTANT VARCHAR2(21) := '<u>Convocatoria:,'')'; -- Malformed HTML found in source data
     C_CONVOCATORIA_TAG    CONSTANT VARCHAR2(23) := '<u>Convocatoria:</u>';
     C_MENOR_QUE           CONSTANT VARCHAR2(1) := '<';
     C_MAYOR_QUE           CONSTANT VARCHAR2(1) := '>';
@@ -192,7 +193,7 @@ BEGIN
             v_contenido := REPLACE(v_contenido, C_TAG_STRONG_OPEN, '');
             v_contenido := REPLACE(v_contenido, C_TAG_STRONG_CLOSE, '');
             v_contenido := REPLACE(v_contenido, C_TAG_BR, '');
-            v_contenido := REPLACE(v_contenido, '<u>Convocatoria:,'')', '');
+            v_contenido := REPLACE(v_contenido, C_MALFORMED_TAG, '');
             v_contenido := REPLACE(v_contenido, C_TAG_SPAN_UNDERLINE, '');
             v_contenido := REPLACE(v_contenido, C_TAG_SPAN_CLOSE, '');
             v_contenido := REPLACE(v_contenido, C_TAG_U_OPEN, '');
