@@ -1,3 +1,73 @@
+/*
+================================================================================
+  VISTA: rrhh.fichaje_saldo_completa_new
+================================================================================
+  PROPÓSITO:
+    Vista completa que consolida información de fichajes, permisos, ausencias
+    y horas extras en un solo resultado. Proporciona una visión unificada del
+    saldo de horas para la interfaz web.
+
+  CAMPOS RETORNADOS:
+    - f: Fecha del día (para ordenamiento)
+    - fecha: Enlace HTML al detalle del día
+    - entrada: Hora de entrada (formato HH24:MI)
+    - salida: Hora de salida (formato HH24:MI)
+    - horas_fichadas_m: Horas fichadas en minutos (-1 para permisos/ausencias)
+    - horas_hacer_m: Horas a hacer en minutos
+    - horas_fichadas: Horas fichadas en formato HH:MM
+    - horas_hacer: Horas a hacer en formato HH:MM
+    - diferencia_minutos/total_horas: Saldo del día
+    - fuera_saldo: Horas fuera del cómputo
+    - observaciones: Enlaces HTML a permisos/ausencias/horas extras
+    - mes_fecha_ano: Período (MMAAAA)
+    - id_funcionario: Identificador del funcionario
+
+  FUENTES DE DATOS (UNION de 4 consultas):
+    1. resumen_saldo + personal_new: Fichajes reales
+    2. permiso + tr_tipo_permiso: Permisos activos
+    3. ausencia + tr_tipo_ausencia: Ausencias activas
+    4. horas_extras + tr_tipo_hora: Horas extraordinarias
+
+  FILTROS APLICADOS EN CADA UNION:
+    - Estados activos (no en 30, 31, 32, 40, 41)
+    - Anulado = 'NO' o NULL
+    - Fechas dentro del período
+
+  FUNCIONES UTILIZADAS:
+    - devuelve_observaciones_fichaje(): Genera texto de observaciones
+
+  NOTAS DE OPTIMIZACIÓN:
+    =========================================================================
+    ADVERTENCIA: Vista muy compleja - 4 UNIONs con múltiples JOINs
+    =========================================================================
+    - Cada UNION realiza múltiples joins que se ejecutan independientemente
+    - La generación de HTML debería moverse a la capa de presentación
+    - Considerar usar UNION ALL si se garantiza no duplicados
+
+    POSIBLES OPTIMIZACIONES:
+    1. Crear vistas intermedias para cada tipo de registro
+    2. Mover la generación de enlaces HTML a la aplicación
+    3. Indexar las tablas de catálogo (tr_tipo_permiso, etc.)
+
+    ÍNDICES RECOMENDADOS:
+    - CREATE INDEX idx_permiso_estado ON permiso(id_estado, anulado);
+    - CREATE INDEX idx_ausencia_estado ON ausencia(id_estado, anulado);
+    - CREATE INDEX idx_horas_extras_fecha ON horas_extras(fecha_horas);
+
+  DEPENDENCIAS:
+    - Vista: resumen_saldo
+    - Vista: personal_new
+    - Tabla: permiso, tr_tipo_permiso
+    - Tabla: ausencia, tr_tipo_ausencia
+    - Tabla: horas_extras, tr_tipo_hora
+    - Tabla: webperiodo
+    - Tabla: calendario_laboral
+    - Tabla: persona, apliweb_usuario
+    - Función: devuelve_observaciones_fichaje()
+
+  ÚLTIMA MODIFICACIÓN: 06/12/2025 - Documentación añadida
+================================================================================
+*/
 CREATE OR REPLACE FORCE VIEW RRHH.FICHAJE_SALDO_COMPLETA_NEW AS
 select distinct ID_DIA as F,
                '<a href=../Finger/detalle_dia.jsp?ID_DIA=' ||

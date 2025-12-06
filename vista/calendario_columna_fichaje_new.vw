@@ -1,3 +1,59 @@
+/*
+================================================================================
+  VISTA: rrhh.calendario_columna_fichaje_new
+================================================================================
+  PROPÓSITO:
+    Versión mejorada de calendario_columna_fichaje que utiliza la función 
+    laboral_dia() para determinar dinámicamente si un día es laboral para 
+    cada funcionario específico, en lugar de usar el campo LABORAL estático.
+
+  DIFERENCIA PRINCIPAL CON calendario_columna_fichaje:
+    - Usa laboral_dia(id_funcionario, id_dia) en lugar del campo LABORAL
+    - Permite determinar días laborales personalizados por funcionario
+    - Considera turnos especiales, vacaciones personales, etc.
+
+  CAMPOS RETORNADOS:
+    - ano: Año del calendario
+    - mes: Mes del calendario
+    - id_funcionario: Identificador del funcionario
+    - id_dia: Fecha del día
+    - desc_columna: Descripción de la columna base
+    - columna1-columna7: Celdas HTML para cada día de la semana
+    - s_columna1-s_columna7: Celdas HTML simples
+    - d_columna1-d_columna7: Celdas HTML con enlace a incidencias
+
+  CÓDIGOS DE COLOR:
+    - #FFFFFF (blanco): Día laboral para el funcionario
+    - #FA5858 (rojo): Día no laboral para el funcionario
+    - #F5ECCE (amarillo): Día actual (hoy)
+
+  NOTAS DE OPTIMIZACIÓN:
+    =========================================================================
+    ADVERTENCIA: Uso intensivo de función laboral_dia()
+    =========================================================================
+    - La función laboral_dia() se llama MÚLTIPLES VECES por cada fila
+      (una vez por cada columna DECODE que evalúa el día de la semana)
+    - Esto puede resultar en un rendimiento significativamente menor
+      que calendario_columna_fichaje
+    
+    RECOMENDACIONES:
+    - Usar solo cuando se necesite el calendario personalizado por funcionario
+    - Considerar cachear el resultado de laboral_dia() si es posible
+    - Filtrar siempre por id_funcionario en las consultas
+
+    ÍNDICES RECOMENDADOS:
+    - Mismos que calendario_columna_fichaje
+    - Índices en las tablas que usa laboral_dia()
+
+  DEPENDENCIAS:
+    - Tabla: calendario_laboral
+    - Tabla: webperiodo
+    - Vista: calendario_fichaje
+    - Función: laboral_dia()
+
+  ÚLTIMA MODIFICACIÓN: 06/12/2025 - Documentación añadida
+================================================================================
+*/
 create or replace force view rrhh.calendario_columna_fichaje_new as
 (
 select ano,mes,nvl(id_funcionario,0) as id_funcionario, id_dia,desc_columna,
