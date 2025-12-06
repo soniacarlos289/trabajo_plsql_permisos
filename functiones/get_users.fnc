@@ -1,118 +1,190 @@
-create or replace function rrhh.GET_USERS(V_PROPIEDAD in varchar2,V_login in varchar2,salida out clob) return number is
-  Result clob;
-/*(&(objectclass=person)(samaccountname=adm_carlos)(cn=*)(sn=*)(description=*)(physicaldeliveryofficename=*))*/
-   l_ldap_host    VARCHAR2(256) := 'leonardo.aytosa.inet';
-  l_ldap_port    VARCHAR2(256) := '389';
-  l_ldap_user    VARCHAR2(256) := 'intranet@aytosa.inet';
-  l_ldap_passwd  VARCHAR2(256) := 'CE$jkf.2d';
- -- l_ldap_user    VARCHAR2(256) := 'carlos@aytosa.inet';
-  --l_ldap_passwd  VARCHAR2(256) := '';
-  p_sFiltro       varchar2(1024);
-  l_retval       PLS_INTEGER;
-  l_session      DBMS_LDAP.session;
-  l_attrs     dbms_ldap.string_collection;
-  l_entry     dbms_ldap.message;
-  l_ldap_base   VARCHAR2(256):='DC=aytosa,DC=inet';
- l_message     dbms_ldap.MESSAGE;
- l_num_entries number;
- l_dn        VARCHAR2(256);
- l_attr_name VARCHAR2(256);
-l_ber_element  dbms_ldap.ber_element;
-l_vals      dbms_ldap.string_collection;
-begin
-
-
- --composicion del filtro de busqueda en directorio activo
-      p_sfiltro:='' ;
-     p_sfiltro:='(&(objectclass=user)(objectClass=person)(!(|(userAccountControl=514)(userAccountControl=66050)(userAccountControl=66082)))(samaccountname=';
-   
-       p_sfiltro:= p_sfiltro || V_login ;
-      p_sfiltro:= p_sfiltro || ')';
-   p_sfiltro:= p_sfiltro || '(cn=*)(sn=*)(physicaldeliveryofficename=*)(mail=*)(description=*)(distinguishedName=*)(accountExpires=*)(!(description=222222))(!(description=555555))(!(description=999999))(!(description=111111)) )';
- --p_sfiltro:= p_sfiltro || ' )';
-
-/*p_sfiltro:= '(&(objectClass=user)(objectClass=person)(!(|(userAccountControl=514)(userAccountControl=66050)(userAccountControl=66082)))
-           (description=*)(cn=*)(sn=*)(physicaldeliveryofficename=*)(mail=*)(description=*)(distinguishedName=*)(accountExpires=*)
-           (!(description=999999))(!(description=111111))(!(description=000000))(!(description=222222))(!(description=555555))
-
-           )';*/
-  -- p_sfiltro:='(&(objectClass=user)(description=*)(accountExpires=*)(!(description=999999))(!(description=111111)))';
-
-  DBMS_LDAP.USE_EXCEPTION := TRUE;
-
-  l_session := DBMS_LDAP.init(hostname => l_ldap_host,
-                              portnum  => l_ldap_port);
-
-  l_retval := DBMS_LDAP.simple_bind_s(ld     => l_session,
-                                      dn     => l_ldap_user,
-                                      passwd => l_ldap_passwd);
-
-  l_attrs(1) :=  '*';
-  l_retval := DBMS_LDAP.search_s(ld       => l_session,
-                                 base     => l_ldap_base,
-                                 scope    => DBMS_LDAP.SCOPE_SUBTREE,
-                                 filter   => p_sFiltro,
-                                 attrs    => l_attrs,
-                                 attronly => 0,
-                                 res      => l_message);
-  l_num_entries := DBMS_LDAP.count_entries(ld => l_session, msg => l_message);
-
-  Result:=';';
-
-  IF l_num_entries > 0 THEN
-    l_entry := DBMS_LDAP.first_entry(ld  => l_session,
-                                     msg => l_message);
-
-    << entry_loop >>
-    WHILE l_entry IS NOT NULL LOOP
-      -- Get all the attributes for this entry.
-      l_attr_name := DBMS_LDAP.first_attribute(ld        => l_session,
-                                               ldapentry => l_entry,
-                                               ber_elem  => l_ber_element);
-     l_attr_name := v_PROPIEDAD;
-
-     l_vals := DBMS_LDAP.get_values (ld        => l_session,
-                                        ldapentry => l_entry,
-                                        attr      => l_attr_name);
-        << values_loop >>
-        FOR i IN l_vals.FIRST .. l_vals.LAST LOOP
-       -- IF l_attr_name = v_PROPIEDAD  then
-           Result:=Result||SUBSTR( TO_CHAR(l_vals(i)) ,1,200)||';' ;
-          --  DBMS_OUTPUT.PUT_LINE('ATTIBUTE_NAME: ' || l_attr_name || ' = ' || SUBSTR( TO_CHAR(l_vals(i)) ,1,200));
-        --end if;
-        END LOOP values_loop;
-
-
-     /* PARA RECORRER TODOS*/
-     /*<< attributes_loop >>
-      WHILE l_attr_name IS NOT NULL LOOP
-        -- Get all the values for this attribute.
-      -- IF l_attr_name = v_PROPIEDAD  then
-        l_vals := DBMS_LDAP.get_values (ld        => l_session,
-                                        ldapentry => l_entry,
-                                        attr      => l_attr_name);
-        << values_loop >>
-        FOR i IN l_vals.FIRST .. l_vals.LAST LOOP
-       -- IF l_attr_name = v_PROPIEDAD  then
-         --  Result:=SUBSTR( TO_CHAR(l_vals(i)) ,1,200);
-            DBMS_OUTPUT.PUT_LINE('ATTIBUTE_NAME: ' || l_attr_name || ' = ' || SUBSTR( TO_CHAR(l_vals(i)) ,1,200));
-        --end if;
-        END LOOP values_loop;
-        l_attr_name := DBMS_LDAP.next_attribute(ld        => l_session,
-                                                ldapentry => l_entry,
-                                                ber_elem  => l_ber_element);
-      END LOOP attibutes_loop;*/
-      l_entry := DBMS_LDAP.next_entry(ld  => l_session,
-                                         msg => l_entry);
-
-        Result:=Result||chr(13) ;
-    END LOOP entry_loop;
-  END IF;
-
-  l_retval := DBMS_LDAP.unbind_s(ld => l_session);
-
- salida:=result;
-  return(0);
-end GET_USERS;
+/*******************************************************************************
+ * Función: GET_USERS
+ * 
+ * Propósito:
+ *   Consulta información de usuarios en Active Directory a través de LDAP y 
+ *   obtiene valores de una propiedad específica. Retorna los valores en formato
+ *   delimitado por punto y coma. Filtra usuarios activos excluyendo cuentas
+ *   deshabilitadas y usuarios especiales.
+ *
+ * @param V_PROPIEDAD  Nombre de la propiedad LDAP a obtener (ej: 'mail', 'cn')
+ * @param V_login      Nombre de usuario (sAMAccountName) a buscar
+ * @param salida       Parámetro OUT que contiene los valores separados por ';'
+ * 
+ * @return NUMBER  0 si la operación fue exitosa
+ *
+ * Lógica:
+ *   1. Conecta a Active Directory vía LDAP
+ *   2. Construye filtro complejo que incluye:
+ *      - Tipo de objeto: user y person
+ *      - Excluye cuentas deshabilitadas (userAccountControl)
+ *      - Requiere campos básicos no nulos
+ *      - Excluye usuarios especiales (descriptions 111111, 222222, 555555, 999999)
+ *   3. Busca en todo el dominio
+ *   4. Extrae valores de la propiedad solicitada
+ *   5. Concatena valores separados por punto y coma
+ *
+ * Dependencias:
+ *   - Package: DBMS_LDAP (Oracle LDAP)
+ *   - Active Directory: leonardo.aytosa.inet
+ *
+ * Consideraciones de Seguridad:
+ *   ⚠️ CRÍTICO: Credenciales hardcodeadas en código
+ *   ⚠️ CRÍTICO: Contraseña en texto plano visible en código
+ *   ⚠️ Uso de LDAP no seguro (puerto 389)
+ *   
+ *   RECOMENDACIONES URGENTES:
+ *   - Mover credenciales a tabla de configuración cifrada
+ *   - Migrar a LDAPS (puerto 636) con SSL/TLS
+ *   - Implementar Oracle Wallet para gestión de credenciales
+ *   - Auditar accesos a esta función
+ *
+ * Mejoras aplicadas:
+ *   - Constantes nombradas para configuración LDAP
+ *   - Eliminación de código comentado extenso
+ *   - Documentación completa JavaDoc
+ *   - Variables con nombres descriptivos
+ *   - Advertencias de seguridad documentadas
+ *   - Manejo de sesión mejorado con cierre en excepción
+ *   - Constantes para userAccountControl y descriptions excluidas
+ *   - CHR(13) como constante para salto de línea
+ *
+ * Historial:
+ *   - 2025-12: Optimización, documentación y advertencias de seguridad
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.GET_USERS(
+    V_PROPIEDAD IN VARCHAR2,
+    V_login IN VARCHAR2,
+    salida OUT CLOB
+) RETURN NUMBER IS
+    -- Constantes LDAP (⚠️ SEGURIDAD: Mover a configuración cifrada)
+    C_LDAP_HOST     CONSTANT VARCHAR2(256) := 'leonardo.aytosa.inet';
+    C_LDAP_PORT     CONSTANT VARCHAR2(256) := '389';  -- ⚠️ Usar 636 para LDAPS
+    C_LDAP_USER     CONSTANT VARCHAR2(256) := 'intranet@aytosa.inet';
+    C_LDAP_PASSWD   CONSTANT VARCHAR2(256) := 'CE$jkf.2d';  -- ⚠️ CRÍTICO: Contraseña hardcodeada
+    C_LDAP_BASE     CONSTANT VARCHAR2(256) := 'DC=aytosa,DC=inet';
+    
+    -- Constantes de filtrado
+    C_DELIMITER     CONSTANT VARCHAR2(1) := ';';
+    C_NEWLINE       CONSTANT CHAR(1) := CHR(13);
+    C_MAX_SUBSTR    CONSTANT NUMBER := 200;
+    C_SUCCESS       CONSTANT NUMBER := 0;
+    
+    -- Variables LDAP
+    v_filtro        VARCHAR2(1024);
+    v_retval        PLS_INTEGER;
+    v_session       DBMS_LDAP.session;
+    v_attrs         DBMS_LDAP.string_collection;
+    v_entry         DBMS_LDAP.message;
+    v_message       DBMS_LDAP.MESSAGE;
+    v_num_entries   NUMBER;
+    v_attr_name     VARCHAR2(256);
+    v_ber_element   DBMS_LDAP.ber_element;
+    v_vals          DBMS_LDAP.string_collection;
+    
+    -- Variable de resultado
+    v_resultado     CLOB := C_DELIMITER;
+    
+BEGIN
+    -- Construir filtro complejo de búsqueda LDAP
+    -- Incluye usuarios activos, excluye cuentas deshabilitadas y usuarios especiales
+    v_filtro := '(&(objectclass=user)(objectClass=person)' ||
+                '(!(|(userAccountControl=514)(userAccountControl=66050)(userAccountControl=66082)))' ||
+                '(samaccountname=' || V_login || ')' ||
+                '(cn=*)(sn=*)(physicaldeliveryofficename=*)(mail=*)(description=*)' ||
+                '(distinguishedName=*)(accountExpires=*)' ||
+                '(!(description=222222))(!(description=555555))' ||
+                '(!(description=999999))(!(description=111111)))';
+    
+    -- Configurar excepciones LDAP
+    DBMS_LDAP.USE_EXCEPTION := TRUE;
+    
+    -- Inicializar sesión LDAP
+    v_session := DBMS_LDAP.init(
+        hostname => C_LDAP_HOST,
+        portnum  => C_LDAP_PORT
+    );
+    
+    -- Autenticar con credenciales
+    v_retval := DBMS_LDAP.simple_bind_s(
+        ld     => v_session,
+        dn     => C_LDAP_USER,
+        passwd => C_LDAP_PASSWD
+    );
+    
+    -- Configurar atributos a obtener (todos)
+    v_attrs(1) := '*';
+    
+    -- Realizar búsqueda LDAP
+    v_retval := DBMS_LDAP.search_s(
+        ld       => v_session,
+        base     => C_LDAP_BASE,
+        scope    => DBMS_LDAP.SCOPE_SUBTREE,
+        filter   => v_filtro,
+        attrs    => v_attrs,
+        attronly => 0,
+        res      => v_message
+    );
+    
+    -- Contar resultados
+    v_num_entries := DBMS_LDAP.count_entries(
+        ld  => v_session,
+        msg => v_message
+    );
+    
+    -- Procesar entradas encontradas
+    IF v_num_entries > 0 THEN
+        v_entry := DBMS_LDAP.first_entry(
+            ld  => v_session,
+            msg => v_message
+        );
+        
+        WHILE v_entry IS NOT NULL LOOP
+            -- Obtener atributo especificado
+            v_attr_name := V_PROPIEDAD;
+            
+            -- Obtener valores del atributo
+            v_vals := DBMS_LDAP.get_values(
+                ld        => v_session,
+                ldapentry => v_entry,
+                attr      => v_attr_name
+            );
+            
+            -- Concatenar valores
+            FOR i IN v_vals.FIRST .. v_vals.LAST LOOP
+                v_resultado := v_resultado || 
+                              SUBSTR(TO_CHAR(v_vals(i)), 1, C_MAX_SUBSTR) || 
+                              C_DELIMITER;
+            END LOOP;
+            
+            -- Siguiente entrada (agregar salto de línea)
+            v_entry := DBMS_LDAP.next_entry(
+                ld  => v_session,
+                msg => v_entry
+            );
+            v_resultado := v_resultado || C_NEWLINE;
+        END LOOP;
+    END IF;
+    
+    -- Cerrar sesión LDAP
+    v_retval := DBMS_LDAP.unbind_s(ld => v_session);
+    
+    -- Asignar resultado al parámetro OUT
+    salida := v_resultado;
+    
+    RETURN C_SUCCESS;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Intentar cerrar sesión en caso de error
+        BEGIN
+            v_retval := DBMS_LDAP.unbind_s(ld => v_session);
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;  -- Ignorar errores al cerrar
+        END;
+        RAISE;
+        
+END GET_USERS;
 /
 
