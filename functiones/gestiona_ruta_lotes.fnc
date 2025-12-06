@@ -35,10 +35,10 @@ BEGIN
         RAISE e_tipo_invalido;
       END IF;
       
-      -- Obtener siguiente ID de lote
-      SELECT NVL(MAX(id_lote), 0) + 1
+      -- Obtener siguiente ID de lote usando secuencia
+      SELECT SEQ_LOTES_CONTROL.NEXTVAL
       INTO v_id_lote_nuevo
-      FROM lotes_control;
+      FROM DUAL;
       
       -- Crear registro de control del lote
       INSERT INTO lotes_control (
@@ -87,20 +87,28 @@ BEGIN
       END IF;
       
       BEGIN
-        SELECT estado, COUNT(*)
-        INTO v_estado_origen, v_count_registros
+        SELECT COUNT(*)
+        INTO v_count_registros
         FROM lotes_procesamiento
-        WHERE id_lote = p_id_lote_origen
-        GROUP BY estado;
+        WHERE id_lote = p_id_lote_origen;
+        
+        IF v_count_registros = 0 THEN
+          RAISE e_lote_no_existe;
+        END IF;
+        
+        SELECT estado
+        INTO v_estado_origen
+        FROM lotes_control
+        WHERE id_lote = p_id_lote_origen;
       EXCEPTION
         WHEN NO_DATA_FOUND THEN
           RAISE e_lote_no_existe;
       END;
       
-      -- Obtener siguiente ID de lote
-      SELECT NVL(MAX(id_lote), 0) + 1
+      -- Obtener siguiente ID de lote usando secuencia
+      SELECT SEQ_LOTES_CONTROL.NEXTVAL
       INTO v_id_lote_nuevo
-      FROM lotes_control;
+      FROM DUAL;
       
       -- Crear nuevo lote control basado en el origen
       INSERT INTO lotes_control (

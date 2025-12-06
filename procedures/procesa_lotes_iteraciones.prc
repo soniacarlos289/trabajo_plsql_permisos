@@ -66,11 +66,29 @@ BEGIN
   
   -- Validar que el lote existe
   BEGIN
-    SELECT estado, COUNT(*) 
-    INTO v_estado_lote, v_registros_restantes
+    SELECT COUNT(*) 
+    INTO v_registros_restantes
     FROM lotes_procesamiento
     WHERE id_lote = p_id_lote
-    GROUP BY estado;
+      AND estado IN ('PENDIENTE', 'REINTENTO');
+    
+    IF v_registros_restantes = 0 THEN
+      -- Verificar si el lote existe
+      SELECT COUNT(*) INTO v_registros_restantes
+      FROM lotes_control
+      WHERE id_lote = p_id_lote;
+      
+      IF v_registros_restantes = 0 THEN
+        RAISE e_lote_no_existe;
+      END IF;
+      
+      -- Lote existe pero no hay registros pendientes
+      v_registros_restantes := 0;
+    END IF;
+    
+    SELECT estado INTO v_estado_lote
+    FROM lotes_control
+    WHERE id_lote = p_id_lote;
   EXCEPTION
     WHEN NO_DATA_FOUND THEN
       RAISE e_lote_no_existe;
@@ -123,26 +141,37 @@ BEGIN
           WHERE id_registro = v_registros(i).id_registro;
           
           -- Procesar según tipo
+          -- NOTA: Esta es la estructura base. Para implementación completa:
+          --       1. Crear procedimientos wrapper (ver ejemplos_integracion_lotes.sql)
+          --       2. Descomentar y reemplazar NULL con llamadas a wrappers
+          --       3. Los wrappers parsean JSON y llaman a procedimientos de negocio
           CASE p_tipo_proceso
             WHEN 'PERMISOS' THEN
-              -- Llamar al procedimiento de permisos
-              NULL; -- Aquí iría la llamada real: permisos_new(params...);
+              -- Llamar al procedimiento wrapper de permisos
+              -- Ejemplo: PROCESA_PERMISO_DESDE_LOTE(
+              --   p_datos_json => v_registros(i).datos_registro,
+              --   p_resultado  => v_resultado_proc,
+              --   p_mensaje    => v_mensaje_proc
+              -- );
+              NULL; -- Reemplazar con llamada real al wrapper
               
             WHEN 'AUSENCIAS' THEN
-              -- Llamar al procedimiento de ausencias
-              NULL; -- Aquí iría la llamada real: ausencias_new(params...);
+              -- Llamar al procedimiento wrapper de ausencias
+              -- Ejemplo: PROCESA_AUSENCIA_DESDE_LOTE(...)
+              NULL; -- Reemplazar con llamada real al wrapper
               
             WHEN 'FICHAJES' THEN
-              -- Llamar al procedimiento de fichajes
-              NULL; -- Aquí iría la llamada real: mete_fichaje_finger_new(params...);
+              -- Llamar al procedimiento wrapper de fichajes
+              -- Ejemplo: PROCESA_FICHAJE_DESDE_LOTE(...)
+              NULL; -- Reemplazar con llamada real al wrapper
               
             WHEN 'NOMINAS' THEN
-              -- Llamar al procedimiento de nóminas
-              NULL; -- Procesamiento de nóminas
+              -- Llamar al procedimiento wrapper de nóminas
+              NULL; -- Reemplazar con llamada real al wrapper
               
             WHEN 'CURSOS' THEN
-              -- Llamar al procedimiento de cursos
-              NULL; -- Procesamiento de cursos
+              -- Llamar al procedimiento wrapper de cursos
+              NULL; -- Reemplazar con llamada real al wrapper
               
             ELSE
               -- Tipo no reconocido (ya validado antes, pero por seguridad)

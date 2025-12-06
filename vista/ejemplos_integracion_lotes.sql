@@ -57,9 +57,10 @@ SELECT
   'PENDIENTE',
   5,
   -- Construir JSON con los parámetros que necesita permisos_new
+  -- Usar formato ISO 8601 (YYYY-MM-DD) para fechas
   '{"id_funcionario": "' || id_funcionario || '",' ||
-  ' "fecha_inicio": "' || TO_CHAR(fecha_inicio, 'DD/MM/YYYY') || '",' ||
-  ' "fecha_fin": "' || TO_CHAR(fecha_fin, 'DD/MM/YYYY') || '",' ||
+  ' "fecha_inicio": "' || TO_CHAR(fecha_inicio, 'YYYY-MM-DD') || '",' ||
+  ' "fecha_fin": "' || TO_CHAR(fecha_fin, 'YYYY-MM-DD') || '",' ||
   ' "id_tipo_permiso": "' || id_tipo_permiso || '",' ||
   ' "observaciones": "' || observaciones || '",' ||
   ' "id_usuario": "ADMIN_RRHH"}'
