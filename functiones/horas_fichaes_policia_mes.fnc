@@ -73,7 +73,7 @@ BEGIN
         FROM FICHAJE_FUNCIONARIO fc
         INNER JOIN personal_new f ON fc.id_funcionario = f.id_funcionario
         WHERE TRUNC(fc.fecha_fichaje_entrada) BETWEEN v_fecha_inicio AND v_fecha_fin
-            AND (TO_CHAR(fc.fecha_fichaje_entrada, 'MM') = TO_CHAR(i_MES, 'FM00')
+            AND (TO_CHAR(fc.fecha_fichaje_entrada, 'MM') = TO_CHAR(i_MES, '00')
                  OR i_MES = C_MES_TODO_ANNO)
             AND fc.id_funcionario = i_ID_FUNCIONARIO;
     EXCEPTION
