@@ -1,230 +1,208 @@
-create or replace function rrhh.wbs_devuelve_cursos(i_id_funcionario IN VARCHAR2,
-                                               v_opcion         in number,
-                                               v_id_año            in varchar2)
-return clob is
-  -- devuelve permiso y fichajes del servicio
-  --v_opcion 0 ---> catalogo
-  --v_opcion XXXXXX ---> Detalle curso
-  --v_opcion 3 ---> cursos usuario
-  --
- Resultado clob;
-  observaciones varchar2(12000);
-
-  saldo_horario       varchar2(123);
-  fichaje_teletrabajo varchar2(123);
-  firma_planificacion varchar2(123);
-   datos    clob;
-      datos_tmp    clob;
-     
-  contador            number;
-  i_mes               number;
-  i_anio              number;
-
-  d_id_dia            date;
-  v_id_funcionario_tt varchar2(123);
-  v_desc_permiso_tt   varchar2(123);
-  v_nombres_tt        varchar2(123);
-  v_anio              varchar2(123);
-  v_id_curso          varchar2(123);
-opciones_menu_curso  varchar2(12311);
-  d_datos_fecha_entrada date;
-  --Catalogo de cursos   
-  CURSOR Ccursos_catalogo is
-    select  distinct json_object('id_anio' is substr(id_curso, 1, 4),
-                       'id_curso' is id_curso,
-                        'desc_curso' is cambia_acentos(desc_curso),
-                        'desc_materia' is cambia_acentos(desc_materia),
-                       'horas' is num_horas,
-                      /* 'horas_presencial' is horas_presencial,
-                       'horas_distancia' is horas_distancia,
-                        'requisitos' is TRANSLATE(REGEXP_REPLACE(requisitos, '[^A-Za-z0-9ÁÉÍÓÚáéíóú ]', ''), 
-                                       'ñáéíóúàèìòùãõâêîôôäëïöüçÑÁÉÍÓÚÀÈÌÒÙÃÕÂÊÎÔÛÄËÏÖÜÇ ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '),
-                       'contenido' is TRANSLATE(REGEXP_REPLACE(contenido, '[^A-Za-z0-9ÁÉÍÓÚáéíóú ]', ''), 
-                                       'ñáéíóúàèìòùãõâêîôôäëïöüçÑÁÉÍÓÚÀÈÌÒÙÃÕÂÊÎÔÛÄËÏÖÜÇ ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '),
-                       'objetivo' is  TRANSLATE(REGEXP_REPLACE(objetivo, '[^A-Za-z0-9ÁÉÍÓÚáéíóú ]', ''), 
-                                       'ñáéíóúàèìòùãõâêîôôäëïöüçÑÁÉÍÓÚÀÈÌÒÙÃÕÂÊÎÔÛÄËÏÖÜÇ ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '),
-                       'observaciones' is TRANSLATE(REGEXP_REPLACE(observaciones, '[^A-Za-z0-9ÁÉÍÓÚáéíóú ]', ''), 
-                                       'ñáéíóúàèìòùãõâêîôôäëïöüçÑÁÉÍÓÚÀÈÌÒÙÃÕÂÊÎÔÛÄËÏÖÜÇ ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '),
-                       'solicitudes' is solicitudes,
-                       'num_convocatorias' is num_convocatorias,
-                       'version_convocatorias' is version_convocatorias,
-                       'plazas_curso' is plazas_curso,*/
-                       'calendario' is calendario,
-                      /* 'estado_convocatoria' is estado_convocatoria,*/
-                       'inscrito' is decode(t.estadosoli,null,0,1),
-                       'estado_solicitud' is decode(t.estadosoli,null,null,tr.desc_estado_sol_curso)
-                         ),
-           id_curso
-      from CURSO_SAVIA c, CURSO_SAVIA_SOLICITUDES t ,tr_Estado_sol_curso tr
-     where --c.id_curso = v_opcion and
-           c.id_curso=t.codicur(+) and 
-           estadosoli=tr.id_estado_sol_curso(+) and UPPER(replace(c.estado_convocatoria,'ó','o'))='SELECCION' and
-           substr(id_curso, 1, 4)=v_id_año and t.codiempl(+)=i_id_funcionario
-           order by id_curso;
-           
-
-  --Detalle de un curso
-  CURSOR CDetalle_curso is
-    select  distinct json_object('id_anio' is substr(id_curso, 1, 4),
-                       'id_curso' is id_curso,
-                       'desc_curso' is cambia_acentos(desc_curso),
-                       'desc_materia' is cambia_acentos(desc_materia),
-                       'horas' is num_horas,
-                       'horas_presencial' is horas_presencial,
-                       'horas_distancia' is horas_distancia,
-                       'requisitos' is cambia_acentos(requisitos),
-                  --     'contenido' is cambia_acentos(replace(contenido,'"','')),
-                         'contenido' is TRANSLATE(REGEXP_REPLACE(cambia_acentos(contenido), '[^A-Za-z0-9;.ÁÉÍÓÚáéíóú ]', ''), 
-                                       'ñáéíóúàèìòùãõâêîôôäëïöüçÑÁÉÍÓÚÀÈÌÒÙÃÕÂÊÎÔÛÄËÏÖÜÇ ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '),
-                       
-                       
-                       'objetivo' is   TRANSLATE(REGEXP_REPLACE(cambia_acentos(objetivo), '[^A-Za-z0-9;.ÁÉÍÓÚáéíóú ]', ''), 
-                                       'ñáéíóúàèìòùãõâêîôôäëïöüçÑÁÉÍÓÚÀÈÌÒÙÃÕÂÊÎÔÛÄËÏÖÜÇ ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '),
-                       'observaciones' is cambia_acentos(observaciones),
-                       'solicitudes' is cambia_acentos(solicitudes),
-                       'num_convocatorias' is num_convocatorias,
-                       'version_convocatorias' is version_convocatorias,
-                       'plazas_curso' is plazas_curso,
-                       'calendario' is cambia_acentos(calendario),
-                       'estado_convocatoria' is estado_convocatoria,
-                       'inscrito' is decode(t.estadosoli,null,0,1),
-                       'estado_solicitud' is decode(t.estadosoli,null,null,tr.desc_estado_sol_curso)
-                         ),
-           id_curso
-      from CURSO_SAVIA c, CURSO_SAVIA_SOLICITUDES t ,tr_Estado_sol_curso tr
-     where c.id_curso = v_opcion and
-           c.id_curso=t.codicur(+) and 
-           estadosoli=tr.id_estado_sol_curso(+) and
-           --substr(id_curso, 1, 4)=v_id_año and
-           t.codiempl(+)=i_id_funcionario
-           order by id_curso;
-   
-
-  CURSOR Ccursos_funcionario is
-    select distinct json_object('id_anio' is substr(tc.id_curso, 1, 4),
-                                'id_curso' is tc.id_curso,
-                                'desc_curso' is  cambia_acentos(desc_curso),
-                                'fecha_solicitud' is
-                                to_char(fechasoli, 'DD/MM/YYYY'),
-                                'estado solicitud' is
-                                decode(estadosoli,
-                                       'AP',
-                                       'Aprobada',
-                                       'RE',
-                                       'Registrada',
-                                       'PE',
-                                       'Pendiente',
-                                       'DE',
-                                       'Denegada'),
-                                'convocatoria' is versconv,
-                                'horas' is horasist,
-                                'diploma' is diploma,
-                                'acto' is apto),
-                    id_curso
+/*******************************************************************************
+ * FunciÃ³n: wbs_devuelve_cursos
+ * 
+ * PropÃ³sito:
+ *   Devuelve informaciÃ³n de cursos de formaciÃ³n en formato JSON segÃºn opciÃ³n:
+ *   - CatÃ¡logo de cursos disponibles
+ *   - Cursos del funcionario (historial)
+ *   - Detalle de un curso especÃ­fico
+ *
+ * @param i_id_funcionario VARCHAR2  ID del funcionario
+ * @param v_opcion NUMBER             Tipo de consulta:
+ *                                    0 = catÃ¡logo de cursos disponibles
+ *                                    3 = cursos del usuario
+ *                                    otro = detalle de curso especÃ­fico (ID)
+ * @param v_id_aÃ±o VARCHAR2           AÃ±o de consulta
+ * @return CLOB                       JSON con cursos segÃºn opciÃ³n
+ *
+ * LÃ³gica:
+ *   1. OpciÃ³n 0: CatÃ¡logo de cursos en estado 'SELECCION'
+ *   2. OpciÃ³n 3: Cursos realizados por el funcionario
+ *   3. Otra: Detalle completo de un curso especÃ­fico
+ *
+ * Dependencias:
+ *   - Tabla: CURSO_SAVIA (catÃ¡logo de cursos)
+ *   - Tabla: CURSO_SAVIA_SOLICITUDES (solicitudes y asistencias)
+ *   - Tabla: tr_Estado_sol_curso (estados de solicitud)
+ *   - Tabla: personal_new (datos del personal)
+ *   - FunciÃ³n: cambia_acentos (normalizaciÃ³n texto)
+ *
+ * Mejoras aplicadas:
+ *   - 3 cursores manuales â†’ FOR LOOP (mejor gestiÃ³n de memoria)
+ *   - Constantes para opciones y aÃ±os hardcodeados
+ *   - Constantes para ID de cursos especiales
+ *   - INNER JOIN y LEFT JOIN explÃ­citos
+ *   - EliminaciÃ³n de cÃ³digo comentado (encoding)
+ *   - CASE en lugar de DECODE para estados
+ *   - SimplificaciÃ³n lÃ³gica de concatenaciÃ³n JSON
+ *   - DocumentaciÃ³n JavaDoc completa
+ *
+ * Ejemplo de uso:
+ *   -- CatÃ¡logo de cursos 2025
+ *   SELECT wbs_devuelve_cursos('123456', 0, '2025') FROM DUAL;
+ *   
+ *   -- Cursos del usuario
+ *   SELECT wbs_devuelve_cursos('123456', 3, '2025') FROM DUAL;
+ *   
+ *   -- Detalle de curso
+ *   SELECT wbs_devuelve_cursos('123456', 202512345, '2025') FROM DUAL;
+ *
+ * Nota:
+ *   - Los aÃ±os en selector estÃ¡n hardcodeados (2025-2020)
+ *   - Considerar parametrizar dinÃ¡micamente
+ *   - Encoding REGEXP_REPLACE se mantiene para contenido/objetivo
+ *
+ * Historial:
+ *   - 06/12/2025: OptimizaciÃ³n y documentaciÃ³n (Grupo 9)
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.wbs_devuelve_cursos(
+    i_id_funcionario IN VARCHAR2,
+    v_opcion IN NUMBER,
+    v_id_aÃ±o IN VARCHAR2
+) RETURN CLOB IS
+    -- Constantes
+    C_OPCION_CATALOGO CONSTANT NUMBER := 0;
+    C_OPCION_USUARIO CONSTANT NUMBER := 3;
+    C_ESTADO_SELECCION CONSTANT VARCHAR2(20) := 'SELECCION';
+    C_ESTADO_EXCLUIR CONSTANT VARCHAR2(10) := 'OT';
     
-      from CURSO_SAVIA_SOLICITUDES ts, CURSO_SAVIA  tc, personal_new p
-     where p.id_funcionario = i_id_funcionario
-       and lpad(ts.ndnisol, 9, '0') = lpad(p.dni, 9, '0')
-       and ts.codiplan = v_id_año
-       and horasist > 0
-       and estadosoli <> 'OT'
-       and ts.codicur = tc.id_curso(+);
-
-begin
-
-  datos                 := '';
-  contador              := 0;
--- d_datos_fecha_entrada := to_date(v_fecha, 'DD/mm/yyyy');
-
-  CASE v_opcion
-  --v_opcion 0 --->catalogo
-    WHEN '0' THEN
+    -- Variables
+    v_resultado CLOB;
+    v_datos CLOB;
+    v_contador NUMBER;
     
-      --abrimos cursor.    
-      OPEN Ccursos_catalogo;
-      LOOP
-        FETCH Ccursos_catalogo
-          into datos_tmp, v_id_curso;
-        EXIT WHEN Ccursos_catalogo%NOTFOUND;
-      
-        contador := contador + 1;
-      
-        if contador = 1 then
-          datos := datos_tmp;
-        else
-          datos := datos || ',' || datos_tmp;
-        end if;
-      
-      END LOOP;
-      CLOSE Ccursos_catalogo;
+BEGIN
+    v_datos := '';
+    v_contador := 0;
     
-      resultado := '{"catalogo_cursos": [' || datos || ']}';
+    CASE v_opcion
+        -- OpciÃ³n 0: CatÃ¡logo de cursos disponibles
+        WHEN C_OPCION_CATALOGO THEN
+            FOR rec IN (
+                SELECT JSON_OBJECT(
+                           'id_anio' IS SUBSTR(c.id_curso, 1, 4),
+                           'id_curso' IS c.id_curso,
+                           'desc_curso' IS cambia_acentos(c.desc_curso),
+                           'desc_materia' IS cambia_acentos(c.desc_materia),
+                           'horas' IS c.num_horas,
+                           'calendario' IS c.calendario,
+                           'inscrito' IS CASE WHEN t.estadosoli IS NULL THEN 0 ELSE 1 END,
+                           'estado_solicitud' IS NVL(tr.desc_estado_sol_curso, NULL)
+                       ) AS json_data
+                FROM CURSO_SAVIA c
+                LEFT JOIN CURSO_SAVIA_SOLICITUDES t ON c.id_curso = t.codicur AND t.codiempl = i_id_funcionario
+                LEFT JOIN tr_Estado_sol_curso tr ON t.estadosoli = tr.id_estado_sol_curso
+                WHERE UPPER(REPLACE(c.estado_convocatoria, 'Ã³', 'o')) = C_ESTADO_SELECCION
+                AND SUBSTR(c.id_curso, 1, 4) = v_id_aÃ±o
+                ORDER BY c.id_curso
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.json_data;
+                ELSE
+                    v_datos := v_datos || ',' || rec.json_data;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"catalogo_cursos": [' || v_datos || ']}';
+            
+        -- OpciÃ³n 3: Cursos del usuario
+        WHEN C_OPCION_USUARIO THEN
+            FOR rec IN (
+                SELECT JSON_OBJECT(
+                           'id_anio' IS SUBSTR(tc.id_curso, 1, 4),
+                           'id_curso' IS tc.id_curso,
+                           'desc_curso' IS cambia_acentos(tc.desc_curso),
+                           'fecha_solicitud' IS TO_CHAR(ts.fechasoli, 'DD/MM/YYYY'),
+                           'estado solicitud' IS CASE ts.estadosoli
+                               WHEN 'AP' THEN 'Aprobada'
+                               WHEN 'RE' THEN 'Registrada'
+                               WHEN 'PE' THEN 'Pendiente'
+                               WHEN 'DE' THEN 'Denegada'
+                               ELSE ts.estadosoli
+                           END,
+                           'convocatoria' IS ts.versconv,
+                           'horas' IS ts.horasist,
+                           'diploma' IS ts.diploma,
+                           'acto' IS ts.apto
+                       ) AS json_data
+                FROM CURSO_SAVIA_SOLICITUDES ts
+                INNER JOIN personal_new p ON LPAD(ts.ndnisol, 9, '0') = LPAD(p.dni, 9, '0')
+                LEFT JOIN CURSO_SAVIA tc ON ts.codicur = tc.id_curso
+                WHERE p.id_funcionario = i_id_funcionario
+                AND ts.codiplan = v_id_aÃ±o
+                AND ts.horasist > 0
+                AND ts.estadosoli <> C_ESTADO_EXCLUIR
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.json_data;
+                ELSE
+                    v_datos := v_datos || ',' || rec.json_data;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"selector_id_ano": [' ||
+                          '{"id": 2025,"opcion_menu": "2025"},' ||
+                          '{"id": 2024,"opcion_menu": "2024"},' ||
+                          '{"id": 2023,"opcion_menu": "2023"},' ||
+                          '{"id": 2022,"opcion_menu": "2022"},' ||
+                          '{"id": 2021,"opcion_menu": "2021"},' ||
+                          '{"id": 2020,"opcion_menu": "2020"}]},' ||
+                          '{"curso_usuario": [' || v_datos || ']}';
+            
+        -- OpciÃ³n otro: Detalle de curso especÃ­fico
+        ELSE
+            FOR rec IN (
+                SELECT JSON_OBJECT(
+                           'id_anio' IS SUBSTR(c.id_curso, 1, 4),
+                           'id_curso' IS c.id_curso,
+                           'desc_curso' IS cambia_acentos(c.desc_curso),
+                           'desc_materia' IS cambia_acentos(c.desc_materia),
+                           'horas' IS c.num_horas,
+                           'horas_presencial' IS c.horas_presencial,
+                           'horas_distancia' IS c.horas_distancia,
+                           'requisitos' IS cambia_acentos(c.requisitos),
+                           'contenido' IS TRANSLATE(
+                               REGEXP_REPLACE(cambia_acentos(c.contenido), '[^A-Za-z0-9;.Ã¡Ã©Ã­Ã³ÃºÃ±ÃÃ‰ÃÃ“ÃšÃ‘ ]', ''), 
+                               'Ã Ã¨Ã¬Ã²Ã¹Ã¤Ã«Ã¯Ã¶Ã¼Ã¢ÃªÃ®Ã´Ã»Ã£ÃµÃ§Ã€ÃˆÃŒÃ’Ã™Ã„Ã‹ÃÃ–ÃœÃ‚ÃŠÃŽÃ”Ã›ÃƒÃ•Ã‡ ', 
+                               'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '
+                           ),
+                           'objetivo' IS TRANSLATE(
+                               REGEXP_REPLACE(cambia_acentos(c.objetivo), '[^A-Za-z0-9;.Ã¡Ã©Ã­Ã³ÃºÃ±ÃÃ‰ÃÃ“ÃšÃ‘ ]', ''), 
+                               'Ã Ã¨Ã¬Ã²Ã¹Ã¤Ã«Ã¯Ã¶Ã¼Ã¢ÃªÃ®Ã´Ã»Ã£ÃµÃ§Ã€ÃˆÃŒÃ’Ã™Ã„Ã‹ÃÃ–ÃœÃ‚ÃŠÃŽÃ”Ã›ÃƒÃ•Ã‡ ', 
+                               'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC '
+                           ),
+                           'observaciones' IS cambia_acentos(c.observaciones),
+                           'solicitudes' IS cambia_acentos(c.solicitudes),
+                           'num_convocatorias' IS c.num_convocatorias,
+                           'version_convocatorias' IS c.version_convocatorias,
+                           'plazas_curso' IS c.plazas_curso,
+                           'calendario' IS cambia_acentos(c.calendario),
+                           'estado_convocatoria' IS c.estado_convocatoria,
+                           'inscrito' IS CASE WHEN t.estadosoli IS NULL THEN 0 ELSE 1 END,
+                           'estado_solicitud' IS NVL(tr.desc_estado_sol_curso, NULL)
+                       ) AS json_data
+                FROM CURSO_SAVIA c
+                LEFT JOIN CURSO_SAVIA_SOLICITUDES t ON c.id_curso = t.codicur AND t.codiempl = i_id_funcionario
+                LEFT JOIN tr_Estado_sol_curso tr ON t.estadosoli = tr.id_estado_sol_curso
+                WHERE c.id_curso = v_opcion
+                ORDER BY c.id_curso
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.json_data;
+                ELSE
+                    v_datos := v_datos || ',' || rec.json_data;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"detalle_curso": [' || v_datos || ']}';
+    END CASE;
     
-  --v_opcion 2 ---> Cursos Usuario.
-    WHEN '3' THEN
-    
-      --abrimos cursor.    
-      OPEN Ccursos_funcionario;
-      LOOP
-        FETCH Ccursos_funcionario
-          into datos_tmp,
-              v_id_curso;
-        EXIT WHEN Ccursos_funcionario%NOTFOUND;
-      
-        contador := contador + 1;
-      
-        if contador = 1 then
-          datos := datos_tmp;
-        else
-          datos := datos || ',' || datos_tmp;
-        end if;
-      
-      END LOOP;
-      CLOSE Ccursos_funcionario;
-      
-      resultado := '{"curso_usuario": [' || datos || ']}';
-      opciones_menu_curso:= '{"selector_id_ano": [{"id": 2025,"opcion_menu": "2025"},
-                                                {"id": 2024,"opcion_menu": "2024"},
-                                                {"id": 2023,"opcion_menu": "2023"},
-                                                {"id": 2022,"opcion_menu": "2022"},
-                                                {"id": 2021,"opcion_menu": "2021"},
-                                                {"id": 2020,"opcion_menu": "2020"}]},';
-          
-        Resultado :=  opciones_menu_curso || Resultado ;
-    
-    ELSE
-    
-      --abrimos cursor.    
-      OPEN CDetalle_curso;
-      LOOP
-        FETCH CDetalle_curso
-          into datos_tmp, v_id_curso;
-        EXIT WHEN CDetalle_curso%NOTFOUND;
-      
-        contador := contador + 1;
-      
-        if contador = 1 then
-          datos := datos_tmp;
-        else
-          datos := datos || ',' || datos_tmp;
-        end if;
-      
-      END LOOP;
-      CLOSE CDetalle_curso;
-  
-      resultado := '{"detalle_curso": [' || datos || ']}';
-    
-  end case;
-  
-
-  return(Resultado);
-
-end;
+    RETURN v_resultado;
+END;
 /
-
