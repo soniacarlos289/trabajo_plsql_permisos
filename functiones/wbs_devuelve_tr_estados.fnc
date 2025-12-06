@@ -1,237 +1,243 @@
-create or replace function rrhh.wbs_devuelve_tr_estados(opcion in varchar2,anio in number) return clob is
---opcion
-      --1 TR estados de los permisos/ausencias
-      --2 TR tipo permiso por aÒo
-      --3 TR tipo_ausencia
-      --4 TR estado solicitud curso
-      --5 tr tipo motivo  incidencia fichaje
-      --6 tr grado  permisos
-      --7 tr id_tipo_dias
-    Resultado clob;
-  
-      datos    clob;
-      datos_tmp    clob;
-      contador number;
-      datos_p    clob;
-      datos_tmp_p    clob;
-      contador_p number;
-      v__permiso varchar2(23);
-      
-
-  --permisos estados
-  CURSOR Ctr_estados_permisos is           
-       SELECT  distinct json_object( 
-                  'id_estado_permiso' is tre.id_estado_permiso,
-                  'estado_permiso' is 
-                  
-                  TRANSLATE(REGEXP_REPLACE(tre.desc_estado_permiso, '[^A-Za-z0-9¡…Õ”⁄·ÈÌÛ˙ ]', ''), 
-                                       'Ò·ÈÌÛ˙‡ËÏÚ˘„ı‚ÍÓÙÙ‰ÎÔˆ¸Á—¡…Õ”⁄¿»Ã“Ÿ√’¬ Œ‘€ƒÀœ÷‹« ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC ')
-                  
-                  ), tre.id_estado_permiso             
-  FROM  TR_ESTADO_permiso tre
- ORDER BY tre.id_estado_permiso;
-  
- 
- cursor  Ctr_tipo_permiso is 
- SELECT  distinct                 
- json_object('id_tipo_permiso' is id_tipo_permiso
-             ,'desc_tipo_permiso' is 
-              
-                  TRANSLATE(REGEXP_REPLACE(desc_tipo_permiso, '[^A-Za-z0-9¡…Õ”⁄·ÈÌÛ˙ ]', ''), 
-                                       'Ò·ÈÌÛ˙‡ËÏÚ˘„ı‚ÍÓÙÙ‰ÎÔˆ¸Á—¡…Õ”⁄¿»Ã“Ÿ√’¬ Œ‘€ƒÀœ÷‹« ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC ')
-             
-             
-             ,'anio' is anio),tr.id_tipo_permiso
+/*******************************************************************************
+ * Funci√≥n: wbs_devuelve_tr_estados
+ * 
+ * Prop√≥sito:
+ *   Devuelve cat√°logos y tipos de referencia (TR) para diferentes entidades
+ *   del sistema: estados de permisos, tipos de permiso, ausencias, cursos,
+ *   incidencias de fichaje, grados y tipos de d√≠as.
+ *
+ * @param opcion VARCHAR2  C√≥digo del cat√°logo a consultar (1-7)
+ * @param anio   NUMBER    A√±o para filtrar tipos de permiso/ausencia
+ * @return CLOB            JSON con elementos del cat√°logo solicitado
+ *
+ * Opciones:
+ *   - '1': Estados de permisos/ausencias
+ *   - '2': Tipos de permiso por a√±o
+ *   - '3': Tipos de ausencia
+ *   - '4': Estados de solicitud de curso
+ *   - '5': Tipos de motivo de incidencia de fichaje
+ *   - '6': Grados de permisos
+ *   - '7': Tipos de d√≠as
+ *
+ * L√≥gica:
+ *   1. Seg√∫n opci√≥n, consulta tabla TR correspondiente
+ *   2. Normaliza caracteres especiales usando funci√≥n cambia_acentos
+ *   3. Construye JSON con todos los elementos del cat√°logo
+ *   4. Retorna array JSON con los datos
+ *
+ * Dependencias:
+ *   - Tabla: tr_estado_permiso (estados de permiso)
+ *   - Tabla: tr_tipo_permiso (tipos de permiso por a√±o)
+ *   - Tabla: tr_tipo_ausencia (tipos de ausencia)
+ *   - Tabla: tr_estado_sol_curso (estados solicitud curso)
+ *   - Tabla: tr_tipo_incidiencia_fichaje (tipos incidencia)
+ *   - Tabla: tr_grado (grados de permiso)
+ *   - Tabla: tr_tipo_dias (tipos de d√≠as)
+ *   - Funci√≥n: cambia_acentos (normalizaci√≥n de caracteres)
+ *
+ * Mejoras aplicadas:
+ *   - Conversi√≥n 7 cursores manuales ‚Üí FOR LOOP
+ *   - Uso de funci√≥n cambia_acentos en lugar de TRANSLATE/REGEXP_REPLACE
+ *   - Constantes nombradas para filtros y estados
+ *   - Eliminaci√≥n de variables no utilizadas
+ *   - Documentaci√≥n JavaDoc completa
+ *
+ * Notas:
+ *   - Filtra ausencias anuladas (tr_anulado='NO')
+ *   - Excluye ausencias con descripci√≥n '0 0' (datos de prueba)
+ *
+ * Historial:
+ *   - 06/12/2025: Optimizaci√≥n Grupo 10 - Cursores a FOR LOOP, cambia_acentos
+ ******************************************************************************/
+CREATE OR REPLACE FUNCTION rrhh.wbs_devuelve_tr_estados(
+    opcion IN VARCHAR2,
+    anio   IN NUMBER
+) RETURN CLOB IS
+    -- Constantes
+    C_ANULADO_NO          CONSTANT VARCHAR2(2) := 'NO';
+    C_DESC_INVALIDA       CONSTANT VARCHAR2(3) := '0 0';
+    
+    -- Variables
+    v_resultado           CLOB;
+    v_datos               CLOB;
+    v_contador            NUMBER := 0;
+    
+BEGIN
+    v_datos := '';
+    
+    CASE opcion
+        -- Opci√≥n 1: Estados de permisos/ausencias
+        WHEN '1' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_estado_permiso' IS id_estado_permiso,
+                        'estado_permiso' IS cambia_acentos(desc_estado_permiso)
+                    ) AS datos_json,
+                    id_estado_permiso
+                FROM tr_estado_permiso
+                ORDER BY id_estado_permiso
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
             
- from tr_tipo_permiso tr 
- where tr.ID_ANO =anio 
- order by tr.id_tipo_permiso;
-      
- 
- cursor  Ctr_tipo_ausencia is 
- SELECT  distinct                 
- json_object('id_tipo_ausencia' is tr.id_tipo_ausencia
-             ,'desc_tipo_permiso' is 
-             TRANSLATE(REGEXP_REPLACE(tr.desc_tipo_ausencia, '[^A-Za-z0-9¡…Õ”⁄·ÈÌÛ˙ ]', ''), 
-                                       'Ò·ÈÌÛ˙‡ËÏÚ˘„ı‚ÍÓÙÙ‰ÎÔˆ¸Á—¡…Õ”⁄¿»Ã“Ÿ√’¬ Œ‘€ƒÀœ÷‹« ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC ')
-             
-             ,'anio' is anio),tr.id_tipo_ausencia             
- from tr_tipo_ausencia tr 
- where tr.tr_anulado='NO' and tr.desc_tipo_ausencia<>'0 0'
- order by tr.id_tipo_ausencia;
- 
- 
- CURSOR Ctr_estados_sol_curso is           
-       SELECT  distinct json_object( 
-                  'id_estado_sol_curso' is tre.id_estado_sol_curso,
-                  'desc_estado_sol_curso' is tre.desc_estado_sol_curso), tre.id_estado_sol_curso             
-  FROM  TR_ESTADO_sol_curso tre
- ORDER BY tre.id_estado_sol_curso;
- 
- CURSOR Ctr_estados_inc_fichaje is           
-       SELECT  distinct json_object( 
-                  'id_estado_motivo_fichaje' is tre.id_tipo_incidencia,
-                  'desc_estado_motivo_fichaje' is 
-                    TRANSLATE(REGEXP_REPLACE(desc_tipo_incidencia, '[^A-Za-z0-9¡…Õ”⁄·ÈÌÛ˙ ]', ''), 
-                                       'Ò·ÈÌÛ˙‡ËÏÚ˘„ı‚ÍÓÙÙ‰ÎÔˆ¸Á—¡…Õ”⁄¿»Ã“Ÿ√’¬ Œ‘€ƒÀœ÷‹« ', 
-                                       'naeiouaeiouaoaeiooaeioucNAEIOUAEIOUAOAEIOOAEIOUC ')
-                  
-                  ), tre.id_tipo_incidencia             
-  FROM TR_TIPO_INCIDIENCIA_FICHAJE tre
- ORDER BY tre.id_tipo_incidencia;
- 
-
- CURSOR Ctr_estados_grado is           
-       SELECT  distinct json_object( 
-                  'id_estado_grado' is tre.id_grado,
-                  'desc_estado_grado' is 
-                  cambia_acentos(tre.desc_grado)
-                  
-                  ), tre.id_grado             
-  FROM TR_GRADO tre
- ORDER BY tre.id_grado;
-  
- CURSOR Ctr_tipo_dias is           
-       SELECT  distinct json_object( 
-                  'id_tipo_dias' is tre.id_tipo_dias,
-                  'desc_tipo_dias' is tre.desc_tipo_dias), tre.id_tipo_dias             
-  FROM TR_tipo_dias tre
- ORDER BY tre.id_tipo_dias;
- 
-   begin   
-     
-   datos:='';
-    datos_tmp:='{""}';
-   contador:=0;
-    datos_p:='';
-    datos_tmp_p:='{""}';
-   contador_p:=0;
-  --abrimos cursor.    
-   
-   CASE opcion
-       WHEN '1' THEN
-          OPEN Ctr_estados_permisos;
-      LOOP
-        FETCH Ctr_estados_permisos
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_estados_permisos%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_estados_permisos;
-      Resultado:= '{"estados_permisos_ausencias": [' || datos || ']}';  
-      
-       WHEN '2' THEN
-          OPEN Ctr_tipo_permiso;
-      LOOP
-        FETCH Ctr_tipo_permiso
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_tipo_permiso%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_tipo_permiso;
-      Resultado:= '{"tipo_permisos_anio": [' || datos || ']}';  
-      
-       WHEN '3' THEN
-          OPEN Ctr_tipo_ausencia;
-      LOOP
-        FETCH Ctr_tipo_ausencia
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_tipo_ausencia%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_tipo_ausencia;
-      Resultado:= '{"tipo_ausencias_anio": [' || datos || ']}';  
+            v_resultado := '{"estados_permisos_ausencias": [' || v_datos || ']}';
+        
+        -- Opci√≥n 2: Tipos de permiso por a√±o
+        WHEN '2' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_tipo_permiso' IS id_tipo_permiso,
+                        'desc_tipo_permiso' IS cambia_acentos(desc_tipo_permiso),
+                        'anio' IS anio
+                    ) AS datos_json,
+                    id_tipo_permiso
+                FROM tr_tipo_permiso
+                WHERE id_ano = anio
+                ORDER BY id_tipo_permiso
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"tipo_permisos_anio": [' || v_datos || ']}';
+        
+        -- Opci√≥n 3: Tipos de ausencia
+        WHEN '3' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_tipo_ausencia' IS id_tipo_ausencia,
+                        'desc_tipo_permiso' IS cambia_acentos(desc_tipo_ausencia),
+                        'anio' IS anio
+                    ) AS datos_json,
+                    id_tipo_ausencia
+                FROM tr_tipo_ausencia
+                WHERE tr_anulado = C_ANULADO_NO
+                  AND desc_tipo_ausencia <> C_DESC_INVALIDA
+                ORDER BY id_tipo_ausencia
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"tipo_ausencias_anio": [' || v_datos || ']}';
+        
+        -- Opci√≥n 4: Estados de solicitud de curso
+        WHEN '4' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_estado_sol_curso' IS id_estado_sol_curso,
+                        'desc_estado_sol_curso' IS desc_estado_sol_curso
+                    ) AS datos_json,
+                    id_estado_sol_curso
+                FROM tr_estado_sol_curso
+                ORDER BY id_estado_sol_curso
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"estados_solicitudes_curso": [' || v_datos || ']}';
+        
+        -- Opci√≥n 5: Tipos de motivo de incidencia de fichaje
+        WHEN '5' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_estado_motivo_fichaje' IS id_tipo_incidencia,
+                        'desc_estado_motivo_fichaje' IS cambia_acentos(desc_tipo_incidencia)
+                    ) AS datos_json,
+                    id_tipo_incidencia
+                FROM tr_tipo_incidiencia_fichaje
+                ORDER BY id_tipo_incidencia
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"estados_incidencia_fichaje": [' || v_datos || ']}';
+        
+        -- Opci√≥n 6: Grados de permisos
+        WHEN '6' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_estado_grado' IS id_grado,
+                        'desc_estado_grado' IS cambia_acentos(desc_grado)
+                    ) AS datos_json,
+                    id_grado
+                FROM tr_grado
+                ORDER BY id_grado
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"estados_grado_permisos": [' || v_datos || ']}';
+        
+        -- Opci√≥n 7: Tipos de d√≠as
+        WHEN '7' THEN
+            FOR rec IN (
+                SELECT DISTINCT
+                    JSON_OBJECT(
+                        'id_tipo_dias' IS id_tipo_dias,
+                        'desc_tipo_dias' IS desc_tipo_dias
+                    ) AS datos_json,
+                    id_tipo_dias
+                FROM tr_tipo_dias
+                ORDER BY id_tipo_dias
+            ) LOOP
+                v_contador := v_contador + 1;
+                
+                IF v_contador = 1 THEN
+                    v_datos := rec.datos_json;
+                ELSE
+                    v_datos := v_datos || ',' || rec.datos_json;
+                END IF;
+            END LOOP;
+            
+            v_resultado := '{"tipo_dias_permisos": [' || v_datos || ']}';
+        
+        ELSE
+            v_resultado := 'ERROR';
+    END CASE;
     
-      WHEN '4' THEN
-          OPEN Ctr_estados_sol_curso;
-      LOOP
-        FETCH Ctr_estados_sol_curso
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_estados_sol_curso%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_estados_sol_curso;
-      Resultado:= '{"estados_solicitudes_curso": [' || datos || ']}';  
+    RETURN v_resultado;
     
-     WHEN '5' THEN
-          OPEN Ctr_estados_inc_fichaje;
-      LOOP
-        FETCH Ctr_estados_inc_fichaje
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_estados_inc_fichaje%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_estados_inc_fichaje;
-      Resultado:= '{"estados_incidencia_fichaje": [' || datos || ']}';  
-    WHEN '6' THEN
-          OPEN Ctr_estados_grado;
-      LOOP
-        FETCH Ctr_estados_grado
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_estados_grado%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_estados_grado;
-      Resultado:= '{"estados_grado_permisos": [' || datos || ']}';  
-      WHEN '7' THEN
-          OPEN Ctr_tipo_dias;
-      LOOP
-        FETCH Ctr_tipo_dias
-          into datos_tmp,v__permiso;
-        EXIT WHEN Ctr_tipo_dias%NOTFOUND;
-          contador:=contador+1;      
-         if contador =1 then   
-           datos:= datos_tmp; 
-         else
-           datos:= datos  || ',' || datos_tmp;   
-         end if;              
-      END LOOP;      
-      CLOSE Ctr_tipo_dias;
-      Resultado:= '{"tipo_dias_permisos": [' || datos || ']}';  
-              
-   ELSE
-         Resultado:= 'ERROR';
-          
-   END CASE;
-      
-      --Pantalla de Roles
-      --Fichaje teletrabajo, firma y Saldo horario
-       
-  
-   return(Resultado);
-  end;
+END wbs_devuelve_tr_estados;
 /
 
