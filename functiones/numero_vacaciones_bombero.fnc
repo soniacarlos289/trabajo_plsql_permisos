@@ -44,7 +44,8 @@ CREATE OR REPLACE FUNCTION rrhh.NUMERO_VACACIONES_BOMBERO(
 ) RETURN VARCHAR2 IS
 
     -- Constante para filtro de año
-    C_ANO_INICIO CONSTANT NUMBER := 2017001;
+    C_ANO_INICIO   CONSTANT NUMBER := 2017001;
+    C_HORA_INICIO  CONSTANT NUMBER := 8;  -- Hora de inicio de guardia (08:00)
     
     -- Variables
     Result          VARCHAR2(1256) := '';
@@ -56,8 +57,8 @@ BEGIN
     FOR rec IN (
         SELECT 'Guardia: ' || GUARDIA || ' -- ' AS guardia_desc
         FROM bomberos_guardias_plani
-        WHERE desde BETWEEN TRUNC(D_FECHA_INICIO) + INTERVAL '8' HOUR 
-                        AND TRUNC(D_FECHA_FIN) + INTERVAL '8' HOUR
+        WHERE desde BETWEEN TRUNC(D_FECHA_INICIO) + NUMTODSINTERVAL(C_HORA_INICIO, 'HOUR')
+                        AND TRUNC(D_FECHA_FIN) + NUMTODSINTERVAL(C_HORA_INICIO, 'HOUR')
           AND SUBSTR(guardia, 1, 7) > C_ANO_INICIO
           AND funcionario = D_FUNCIONARIO
         ORDER BY guardia

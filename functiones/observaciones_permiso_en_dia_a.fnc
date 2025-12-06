@@ -62,6 +62,16 @@ CREATE OR REPLACE FUNCTION rrhh.OBSERVACIONES_PERMISO_EN_DIA_A(
     C_RESPUESTA_SI      CONSTANT VARCHAR2(2) := 'SI';
     C_RESPUESTA_NO      CONSTANT VARCHAR2(2) := 'NO';
     
+    -- Constantes para mensajes de incidencia
+    C_MSG_SIN_FICHAJES CONSTANT VARCHAR2(200) := 'Sin fichajes en d' || CHR(237) || 'a laborable.';
+    C_IMG_INCIDENCIA   CONSTANT VARCHAR2(200) := '<img src="../../imagen/icono_advertencia.jpg" ' ||
+                                                  'alt="INCIDENCIA" width="22" height="22" border="0" >';
+    
+    -- Constantes para descripción de turnos
+    C_TURNO_MANANA CONSTANT VARCHAR2(20) := 'Turno Ma' || CHR(241) || 'ana';
+    C_TURNO_TARDE  CONSTANT VARCHAR2(20) := 'Turno Tarde';
+    C_TURNO_NOCHE  CONSTANT VARCHAR2(20) := 'Turno Noche';
+    
     -- Variables
     Result              VARCHAR2(1512);
     i_encontrado        NUMBER := 0;
@@ -120,10 +130,8 @@ BEGIN
             SELECT DISTINCT 
                 CASE 
                     WHEN observaciones IS NOT NULL THEN observaciones
-                    WHEN DESC_TIPO_INCIDENCIA = 'Sin fichajes en d' || CHR(237) || 'a laborable.' THEN
-                        'Sin fichajes en d' || CHR(237) || 'a laborable.' ||
-                        '<img src="../../imagen/icono_advertencia.jpg" ' ||
-                        'alt="INCIDENCIA" width="22" height="22" border="0" >'
+                    WHEN DESC_TIPO_INCIDENCIA = C_MSG_SIN_FICHAJES THEN
+                        C_MSG_SIN_FICHAJES || C_IMG_INCIDENCIA
                     ELSE DESC_TIPO_INCIDENCIA
                 END
             INTO Result
@@ -145,9 +153,9 @@ BEGIN
         -- Si no hay incidencias, mostrar turno
         IF i_encontrado = 0 THEN
             Result := CASE V_TURNO
-                WHEN 1 THEN 'Turno Ma' || CHR(241) || 'ana'  -- Mañana
-                WHEN 2 THEN 'Turno Tarde'
-                WHEN 3 THEN 'Turno Noche'
+                WHEN 1 THEN C_TURNO_MANANA
+                WHEN 2 THEN C_TURNO_TARDE
+                WHEN 3 THEN C_TURNO_NOCHE
                 ELSE ''
             END;
         END IF;
