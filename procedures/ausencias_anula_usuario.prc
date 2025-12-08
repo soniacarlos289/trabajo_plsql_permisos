@@ -1,270 +1,333 @@
-create or replace procedure rrhh.AUSENCIAS_ANULA_USUARIO(
-          V_ID_AUSENCIA in  number,
-          V_ID_FUNCIONARIO in number,
-           todo_ok_Basico out integer,
-            msgBasico out varchar2
-           ) is
+/**
+ * AUSENCIAS_ANULA_USUARIO
+ *
+ * @description
+ * Permite a un empleado anular su propia solicitud de ausencia antes de que comience.
+ * Revierte las bolsas (concilia/sindical), anula finger y notifica por correo.
+ *
+ * @details
+ * Requisitos para anulación por usuario:
+ * - Fecha inicio ausencia > fecha actual (no puede anular ausencias ya iniciadas)
+ * - El funcionario debe ser propietario de la ausencia
+ * - Tipo funcionario válido en personal_new
+ *
+ * Operaciones realizadas:
+ * - Cambio estado 41 (Anulado por usuario)
+ * - Reversión bolsa_concilia (tipo 50)
+ * - Reversión hora_sindical (tipos > 500)
+ * - Anulación en sistema finger (si el usuario ficha)
+ * - Notificación correo al JS
+ *
+ * Estados ausencias:
+ * 10=Solicitado, 20=Pde JS, 21=Pde JA, 22=Pde RRHH
+ * 30=Rechazado JS, 31=Rechazado JA, 32=Denegado RRHH
+ * 40=Anulado RRHH, 41=Anulado Usuario, 80=Concedido
+ *
+ * @param V_ID_AUSENCIA    IN ID de la ausencia a anular
+ * @param V_ID_FUNCIONARIO IN ID del funcionario que solicita anular
+ * @param todo_ok_Basico   OUT 0=Éxito, 1=Error
+ * @param msgBasico        OUT Mensaje resultado
+ *
+ * @notes
+ * - Solo puede anular ausencias futuras (fecha_inicio > hoy)
+ * - Anulación finger solo si usuario ficha (codpers en presenci)
+ * - Revertir bolsa_concilia: utilizadas y pendientes_justificar
+ * - Revertir hora_sindical: total_utilizadas por mes
+ * - Notificación correo enviado a JS de la ausencia anulada
+ *
+ * @see anula_fichaje_finger_15000  Anulación en sistema finger
+ * @see envio_correo                Envío notificación
+ *
+ * @author Sistema Ausencias RRHH
+ * @date   Actualizado 03/03/2017 (añadido estado 41)
+ * @version 2.0
+ */
+CREATE OR REPLACE PROCEDURE RRHH.AUSENCIAS_ANULA_USUARIO (
+  V_ID_AUSENCIA    IN NUMBER,
+  V_ID_FUNCIONARIO IN NUMBER,
+  todo_ok_Basico   OUT INTEGER,
+  msgBasico        OUT VARCHAR2
+) IS
 
-i_ficha number;
-v_num_dias number;
-v_id_tipo_dias_per varchar2(1);
-v_codpers varchar2(5);
-i_total_horas number;
-i_todo_ok_B number;
+  -- Constantes
+  C_ESTADO_ANULADO_USUARIO CONSTANT VARCHAR2(2) := '41';
+  C_TIPO_AUSENCIA_CONCILIA CONSTANT VARCHAR2(3) := '50';
+  C_TIPO_AUSENCIA_SINDICAL CONSTANT NUMBER := 500;
+  
+  -- Variables ausencia
+  I_id_estado_ausencia     NUMBER;
+  i_ausencia_no_encontrado NUMBER;
+  i_observaciones          VARCHAR2(1000);
+  i_justificacion          VARCHAR2(2);
+  i_total_utilizadas       NUMBER;
+  i_id_ano                 NUMBER;
+  i_id_tipo_ausencia       NUMBER;
+  i_id_mes                 NUMBER;
+  i_fecha_inicio           DATE;
+  i_fecha_fin              DATE;
+  i_hora_inicio            VARCHAR2(12);
+  i_hora_fin               VARCHAR2(12);
+  i_id_funcionario         NUMBER;
+  i_id_js                  NUMBER;
+  i_DESC_TIPO_AUSENCIA     VARCHAR2(100);
+  fecha_hoy                DATE;
+  i_tipo_funcionario       NUMBER;
+  
+  -- Variables finger
+  i_ficha   NUMBER;
+  i_codpers VARCHAR2(5);
+  
+  -- Variables correo
+  correo_v_funcionario VARCHAR2(100);
+  i_nombre_peticion    VARCHAR2(100);
+  correo_js            VARCHAR2(100);
+  i_sender             VARCHAR2(100);
+  i_recipient          VARCHAR2(100);
+  I_ccrecipient        VARCHAR2(100);
+  i_subject            VARCHAR2(100);
+  I_message            VARCHAR2(4000);
+  i_desc_mensaje       VARCHAR2(4000);
 
-v_id_tipo_dias_ent  varchar2(256);
-i_codpers varchar(5);
-i_id_funcionario number;
-v_num_dias_tiene_per number;
-i_formato_fecha_inicio date;
-i_formato_fecha_fin date;
-i_diferencia_TOTAL date;
-i_total_dias number;
-i_contador number;
-i_cambia_estado number;
- I_id_estado_ausencia number;
- i_ausencia_no_encontrado number;
-  i_observaciones varchar2(1000);
-  i_justificacion varchar2(2);
-i_total_utilizadas number;
-i_id_ano number;
-i_id_tipo_ausencia number;
-i_id_mes number;
-i_fecha_inicio varchar2(12);
-i_fecha_fin varchar2(12);
-i_hora_inicio  varchar2(12);
-i_hora_fin varchar2(12);
-i_id_js number;
-  correo_v_funcionario varchar2(512);
-  i_nombre_peticion    varchar2(512);
-  correo_js            varchar2(512);
-  correo_ja            varchar2(512);
-  i_sender             varchar2(256);
-  i_recipient          varchar2(256);
-  I_ccrecipient        varchar2(256);
-  i_subject            varchar2(256);
-  I_message            varchar2(15120);
- i_desc_mensaje varchar2(25120);
- i_DESC_TIPO_AUSENCIA varchar2(512);
-fecha_hoy date;
- i_tipo_funcionario number;
-begin
--- 10 Solicitado
--- 20 Pde. Firma Jefe Secc.
--- 21 Pde. Firma Jefe Area
--- 22 Pde Vo de RRHH.
--- 30 Rechazado Jefe Secc.
--- 31 Rechazado Jefe Area.
--- 32 Denegado RRHH
--- 41 Anulado por USUARIO //a�adido 03/03/2017
--- 40 Anulado RRHH
--- 80 Concedido  RRHH
-
-todo_ok_basico:=0;
- I_id_estado_ausencia:=0;
-
-/* msgsalida:= V_ID_AUSENCIA || ' .'||
-          V_ID_ESTADO_AUSENCIA || ' .'||
-          V_JUSTIFICACION|| ' .'||V_OBSERVACIONES ;
-          return;
-*/
-i_ausencia_no_encontrado:=0;
-
-
---obtenemos los datos del permiso actual.
 BEGIN
 
-         select  t.id_estado,OBSERVACIONES,t.JUSTIFICADO,t.total_horas,
-         to_char(t.fecha_inicio,'MM') ,t.id_ano,t.id_tipo_ausencia,t.id_funcionario,
-          to_char(t.fecha_inicio,'DD/mm/yyyy') as fecha_inicio,
-           to_char(t.fecha_fin,'DD/mm/yyyy') as fecha_fin,
-       to_char(t.fecha_inicio,'HH24:mi') hora_inicio,
-       to_char(t.fecha_fin,'HH24:mi') hora_fin,t.firmado_js,DESC_TIPO_AUSENCIA
-         into   I_id_estado_ausencia,
-         i_observaciones ,
-  i_justificacion,i_total_utilizadas,i_id_mes,i_id_ano,i_id_tipo_ausencia,
-  i_id_funcionario,i_fecha_inicio,i_fecha_fin,i_hora_inicio,i_hora_fin,i_id_js,
-  i_DESC_TIPO_AUSENCIA
-    from ausencia t,tr_tipo_ausencia  tr
-    where ID_AUSENCIA=V_ID_AUSENCIA and
-          t.id_tipo_ausencia=tr.id_tipo_ausencia;
-EXCEPTION
-WHEN NO_DATA_FOUND THEN
-                   i_ausencia_no_encontrado:=1;
-
-END;
-
-
-IF  V_ID_FUNCIONARIO <>i_id_funcionario THEN
-     todo_ok_basico:=1;
-     msgBasico:='Operacion no realizada. Avisar a RRHH.'  || V_ID_FUNCIONARIO  || '--' || i_id_funcionario;
-     RETURN;
-END IF;
-
-
---chm 01/04/2017
---Compruebo el tipo de funcionario de la solicitud
- i_tipo_funcionario:=10;
+  --------------------------------------------------------------------------------
+  -- FASE 1: VALIDAR AUSENCIA Y OBTENER DATOS
+  --------------------------------------------------------------------------------
+  
+  todo_ok_basico := 0;
+  I_id_estado_ausencia := 0;
+  i_ausencia_no_encontrado := 0;
+  
+  -- Obtener datos ausencia
   BEGIN
-    select tipo_funcionario2
-      into i_tipo_funcionario
-      from personal_new pe
-     where id_funcionario = i_id_funcionario  and rownum<2;
+    SELECT t.id_estado,
+           OBSERVACIONES,
+           t.JUSTIFICADO,
+           t.total_horas,
+           TO_CHAR(t.fecha_inicio, 'MM'),
+           t.id_ano,
+           t.id_tipo_ausencia,
+           t.id_funcionario,
+           t.fecha_inicio,
+           t.fecha_fin,
+           TO_CHAR(t.fecha_inicio, 'HH24:mi'),
+           TO_CHAR(t.fecha_fin, 'HH24:mi'),
+           t.firmado_js,
+           DESC_TIPO_AUSENCIA
+    INTO   I_id_estado_ausencia,
+           i_observaciones,
+           i_justificacion,
+           i_total_utilizadas,
+           i_id_mes,
+           i_id_ano,
+           i_id_tipo_ausencia,
+           i_id_funcionario,
+           i_fecha_inicio,
+           i_fecha_fin,
+           i_hora_inicio,
+           i_hora_fin,
+           i_id_js,
+           i_DESC_TIPO_AUSENCIA
+    FROM   ausencia t,
+           tr_tipo_ausencia tr
+    WHERE  ID_AUSENCIA = V_ID_AUSENCIA
+      AND  t.id_tipo_ausencia = tr.id_tipo_ausencia;
+      
   EXCEPTION
     WHEN NO_DATA_FOUND THEN
-      i_tipo_funcionario:=-1;
+      i_ausencia_no_encontrado := 1;
   END;
-
-  IF i_tipo_funcionario = -1 then
+  
+  -- Validar propiedad ausencia
+  IF V_ID_FUNCIONARIO <> i_id_funcionario THEN
     todo_ok_basico := 1;
-    msgBasico      := 'Operacion no realizada. TIPO FUNCIONARIO NO ENCONTRADO.';
+    msgBasico := 'Operacion no realizada. Avisar a RRHH.' || V_ID_FUNCIONARIO || '--' || i_id_funcionario;
     RETURN;
   END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: VALIDAR TIPO FUNCIONARIO
+  --------------------------------------------------------------------------------
+  
+  i_tipo_funcionario := 10;
+  
+  BEGIN
+    SELECT tipo_funcionario2
+    INTO   i_tipo_funcionario
+    FROM   personal_new pe
+    WHERE  id_funcionario = i_id_funcionario
+      AND  ROWNUM < 2;
+      
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_tipo_funcionario := -1;
+  END;
+  
+  IF i_tipo_funcionario = -1 THEN
+    todo_ok_basico := 1;
+    msgBasico := 'Operacion no realizada. TIPO FUNCIONARIO NO ENCONTRADO.';
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: VALIDAR FECHA INICIO > HOY
+  --------------------------------------------------------------------------------
+  
+  SELECT TO_DATE(TO_CHAR(SYSDATE - 1, 'dd/mm/yyyy'), 'dd/mm/yyyy')
+  INTO   fecha_hoy
+  FROM   DUAL;
+  
+  IF fecha_hoy >= i_fecha_inicio THEN
+    msgbasico := 'Para anular la Fecha de Inicio del permiso tiene que ser menor que la fecha actual .';
+    todo_ok_basico := 1;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: ANULAR EN FINGER (si ficha)
+  --------------------------------------------------------------------------------
+  
+  i_ficha := 1;
+  
+  BEGIN
+    SELECT DISTINCT codpers
+    INTO   i_codpers
+    FROM   personal_new p,
+           presenci pr,
+           apliweb_usuario u
+    WHERE  p.id_funcionario = i_id_funcionario
+      AND  LPAD(p.id_funcionario, 6, 0) = LPAD(u.id_funcionario, 6, 0)
+      AND  u.id_fichaje IS NOT NULL
+      AND  u.id_fichaje = pr.codpers
+      AND  codinci <> 999
+      AND  ROWNUM < 2;
+      
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_ficha := 0;
+  END;
+  
+  IF i_ficha = 1 THEN
+    ANULA_FICHAJE_FINGER_15000(
+      i_id_ano,
+      i_id_funcionario,
+      i_fecha_inicio,
+      i_hora_inicio,
+      i_hora_fin,
+      i_codpers,
+      0,
+      '00000',
+      todo_ok_basico,
+      msgbasico
+    );
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 5: ACTUALIZAR ESTADO Y REVERTIR BOLSAS
+  --------------------------------------------------------------------------------
+  
+  -- Cambiar estado a 41 (Anulado Usuario)
+  UPDATE AUSENCIA
+  SET    id_Estado = C_ESTADO_ANULADO_USUARIO,
+         fecha_modi = SYSDATE
+  WHERE  ID_AUSENCIA = V_ID_AUSENCIA
+    AND  ROWNUM < 2;
+  
+  -- Revertir bolsa concilia (tipo 50)
+  IF i_ID_TIPO_AUSENCIA = C_TIPO_AUSENCIA_CONCILIA THEN
+    UPDATE BOLSA_CONCILIA
+    SET    utilizadas = utilizadas - i_total_utilizadas,
+           pendientes_justificar = pendientes_justificar - i_total_utilizadas
+    WHERE  id_ano = i_id_ano
+      AND  id_funcionario = V_ID_FUNCIONARIO;
+  END IF;
+  
+  -- Revertir horas sindicales (tipos > 500)
+  IF i_id_tipo_ausencia > C_TIPO_AUSENCIA_SINDICAL THEN
+    UPDATE HORA_SINDICAL
+    SET    TOTAL_UTILIZADAS = TOTAL_UTILIZADAS - i_total_utilizadas
+    WHERE  id_ano = i_id_ano
+      AND  id_MES = i_id_mes
+      AND  id_funcionario = i_id_funcionario
+      AND  ID_TIPO_AUSENCIA = i_id_tipo_ausencia
+      AND  ROWNUM < 2;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 6: NOTIFICAR POR CORREO
+  --------------------------------------------------------------------------------
+  
+  -- Obtener correos
+  BEGIN
+    SELECT MIN(peticion),
+           MIN(nombre_peticion),
+           MIN(js)
+    INTO   correo_v_funcionario,
+           i_nombre_peticion,
+           correo_js
+    FROM   (SELECT login || '@aytosalamanca.es' AS peticion,
+                   SUBSTR(DIST_NAME, INSTR(DIST_NAME, '=', 1) + 1, INSTR(DIST_NAME, ',', 1) - INSTR(DIST_NAME, '=', 1) - 1) AS nombre_peticion,
+                   '' AS js
+            FROM   apliweb_usuario
+            WHERE  id_funcionario = TO_CHAR(i_id_funcionario)
+            UNION
+            SELECT '' AS peticion,
+                   '' AS nombre_peticion,
+                   login || '@aytosalamanca.es' AS js
+            FROM   apliweb_usuario
+            WHERE  LPAD(id_funcionario, 6, '0') = LPAD(i_id_js, 6, '0'));
+            
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_id_js := '';
+  END;
+  
+  -- Preparar mensaje correo
+  i_sender := correo_v_funcionario;
+  I_ccrecipient := '';
+  i_recipient := correo_js;
+  
+  BEGIN
+    SELECT CABECERA || ' ' ||
+           'Ausencia ANULADA por' || ' ' ||
+           SOLICITADO || ' ' ||
+           i_nombre_peticion || ' ' ||
+           TIPO_PERMISO || ' ' ||
+           i_desc_tipo_ausencia || ' ' ||
+           FECHA_INICIO || ' ' ||
+           TO_CHAR(i_fecha_inicio, 'DD/MM/YYYY') || ' ' ||
+           DECODE(SUBSTR(i_ID_TIPO_AUSENCIA, 1, 1), '5',
+                  FECHA_FIN || ' ' || TO_CHAR(i_fecha_fin, 'DD/MM/YYYY'), '') || ' ' ||
+           HORA_INICIO || ' ' || i_HORA_INICIO || ' ' ||
+           HORA_FIN || ' ' || i_HORA_FIN || ' ' ||
+           CABECERA_FI || ' ' ||
+           'Esta Ausencia ha sido ANULADA' || ' ' ||
+           CABECERA_FIN_2
+    INTO   i_desc_mensaje
+    FROM   FORMATO_CORREO
+    WHERE  DECODE(SUBSTR(i_ID_TIPO_AUSENCIA, 1, 1), '5', '500', '222') = ID_TIPO_PERMISO;
+    
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_desc_tipo_ausencia := '';
+  END;
+  
+  I_message := i_desc_mensaje;
+  i_subject := 'Ausencia ha sido Anulada por el Usuario.';
+  
+  envio_correo(i_sender, i_recipient, I_ccrecipient, i_subject, I_message);
+  
+  msgbasico := 'Permiso anulado correctamente.';
+  todo_ok_basico := 0;
+  
+  COMMIT;
 
-
-select to_date(to_char(sysdate-1,'dd/mm/yyyy'),'dd/mm/yyyy') into fecha_hoy from dual;
-
---La fecha de hoy mayor a la fecha de inicio al permiso
-IF FECHA_HOY < I_FECHA_INICIO THEN
-
-
-   --Metemos la ausencia en el finger. --a?adido dia 6 de abril 2010
-    --El funcionario Ficha ??
-                 i_ficha:=1;
-                 BEGIN
-                      SELECT
-                              distinct codpers
-                              into i_codpers
-                      FROM
-                              personal_new p  ,presenci pr,
-                              apliweb_usuario u
-                      WHERE
-                              p.id_funcionario=I_ID_FUNCIONARIO  and
-                              lpad(p.id_funcionario,6,0)=lpad(u.id_funcionario,6,0) and --cambiado 29/03/2010
-                              u.id_fichaje is not null and
-                              u.id_fichaje=pr.codpers and
-                              codinci<>999 and rownum <2;
-                 EXCEPTION
-                       WHEN NO_DATA_FOUND THEN
-                              i_ficha:=0;
-                 END;
-
-         if i_ficha=1 then
-            ANULA_FICHAJE_FINGER_15000(i_id_ano ,
-                                i_id_funcionario ,
-                                i_fecha_inicio,
-                                i_hora_inicio ,
-                                i_hora_fin ,
-                                i_codpers ,
-                               0 ,'00000',
-                              todo_ok_basico ,
-                               msgbasico);
-         end if;
-
-
-
-    UPDATE AUSENCIA
-    SET  id_Estado='41',fecha_modi=sysdate
-    WHERE   ID_AUSENCIA=V_ID_AUSENCIA and rownum < 2;
-
-
-  --chm 13/02/2020
---quito las horas de las bolsa concilia
-IF i_ID_TIPO_AUSENCIA = 50 THEN
-
-   UPDATE BOLSA_CONCILIA
-   SET
-   utilizadas=utilizadas-i_total_utilizadas,
-   pendientes_justificar=pendientes_justificar-i_total_utilizadas
-   where id_ano=i_id_ano AND  id_funcionario=V_ID_FUNCIONARIO;
-
-END IF;
-
-   --quito las horas sindicales.
-   IF i_id_tipo_ausencia > 500 THEN
-
-     UPDATE HORA_SINDICAL
-     SET TOTAL_UTILIZADAS=TOTAL_UTILIZADAS-i_total_utilizadas
-     where
-                id_ano=i_id_ano AND
-                id_MES=i_id_mes and
-                id_funcionario=i_id_funcionario AND
-                ID_TIPO_AUSENCIA= i_id_tipo_ausencia and rownum < 2;
-
-   END IF;
-
-
-    --busco correo del funcionario y la persona que firma
-          BEGIN
-             select MIN(peticion), MIN(nombre_peticion), MIN(js)
-             into correo_v_funcionario, i_nombre_peticion, correo_js
-             from (select login || '@aytosalamanca.es' as peticion,substr(  DIST_NAME,  INSTR(DIST_NAME,'=',1) +1,INSTR(DIST_NAME,',',1) -INSTR(DIST_NAME,'=',1)-1) as nombre_peticion,'' as js from apliweb_usuario where id_funcionario=to_char(I_ID_FUNCIONARIO)
-             union
-             select '' as peticion, '' as nombre_peticion ,login || '@aytosalamanca.es' as js  from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_js,6,'0') );
-          EXCEPTION
-             WHEN NO_DATA_FOUND THEN
-                i_id_js := '';
-          END;
-
-
-          --ENVIO DE CORREO AL FUNCIONARIO CON LA DENEGACION
-           i_sender      := correo_v_funcionario;
-           I_ccrecipient := '';
-           i_recipient   := correo_js;
-
-               --Descripcion de la ausencia .
-              BEGIN
-              select CABECERA || ' '||
-                     'Ausencia ANULADA por' ||' '||
-                         SOLICITADO || ' '||
-                         i_nombre_peticion ||' '||
-                         TIPO_PERMISO ||' '||
-                         i_desc_tipo_ausencia||' '||
-                         FECHA_INICIO  ||' '||
-                         i_FECHA_INICIO  ||' '||
-                          DECODE(substr(i_ID_TIPO_AUSENCIA,1,1) ,'5',
-                         FECHA_FIN  ||' '||
-                         i_FECHA_FIN
-                          ,'') ||' '||
-
-                         HORA_INICIO ||' '|| i_HORA_INICIO   ||' '||  --
-                         HORA_FIN    ||' '|| i_HORA_FIN      || ' '|| --
-                         CABECERA_FI ||' '||
-                      'Esta Ausencia ha sido ANULADA'||' '||
-                      CABECERA_FIN_2
-            into  i_desc_mensaje
-                 from  FORMATO_CORREO
-                 where DECODE( substr(i_ID_TIPO_AUSENCIA,1,1) ,
-                     '5' , '500' ,
-                     '222'
-                     )=ID_TIPO_PERMISO;
-          EXCEPTION
-                   WHEN NO_DATA_FOUND THEN
-                   i_desc_tipo_ausencia:='';
-          END;
-
-
-          I_message:= i_desc_mensaje;
-          i_subject := 'Ausencia ha sido Anulada por el Usuario.';
-          envio_correo(i_sender ,     i_recipient ,
-                              I_ccrecipient ,
-                              i_subject ,
-                              I_message);
-         /* envio_correo(i_sender ,     'carlos@aytosalamanca.es' ,
-                              I_ccrecipient ,
-                              i_subject ,
-                              I_message || ' ' || V_ID_AUSENCIA || ' ' ||   V_ID_FUNCIONARIO);
-       */   msgbasico:='Permiso anulado correctamente.';
-          todo_ok_basico:='0';
-          commit;
-
-ELSE
-          msgbasico:='Para anular la Fecha de Inicio del permiso tiene que ser menor que la fecha actual .';
-          todo_ok_basico:='1';
-          RETURN;
-
-END IF;
-
+EXCEPTION
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('Error en ausencias_anula_usuario: ' || SQLERRM);
+    ROLLBACK;
+    todo_ok_basico := 1;
+    msgBasico := 'Error en ausencias_anula_usuario: ' || SQLERRM;
+    
 END AUSENCIAS_ANULA_USUARIO;
 /
-
