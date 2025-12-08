@@ -66,7 +66,7 @@ CREATE OR REPLACE FUNCTION rrhh.GET_USERS_TEST(
     C_LDAP_HOST     CONSTANT VARCHAR2(256) := 'leonardo.aytosa.inet';
     C_LDAP_PORT     CONSTANT VARCHAR2(256) := '389';  -- ⚠️ Usar 636 para LDAPS
     C_LDAP_USER     CONSTANT VARCHAR2(256) := 'intranet@aytosa.inet';
-    C_LDAP_PASSWD   CONSTANT VARCHAR2(256) := 'CE$jkf.2d';  -- ⚠️ CRÍTICO: Contraseña hardcodeada
+    C_LDAP_PASSWD   CONSTANT VARCHAR2(256) := '" CRÍTICO: Contraseña hardcodeada
     C_LDAP_BASE     CONSTANT VARCHAR2(256) := 'DC=aytosa,DC=inet';
     
     -- Constantes de filtrado
