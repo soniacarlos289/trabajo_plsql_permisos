@@ -1,179 +1,222 @@
-CREATE OR REPLACE PROCEDURE RRHH."INSERTA_AUSENCIAS_RRHH"
-       (V_ID_ANO in number,
-        V_ID_FUNCIONARIO in number,
-        V_ID_TIPO_FUNCIONARIO in number,
-        V_ID_TIPO_AUSENCIA in varchar2,
-        V_FECHA_INICIO in DATE,
-        V_FECHA_FIN in DATE,
-        V_HORA_INICIO  in varchar2,
-        V_HORA_FIN  in varchar2,
-        V_JUSTIFICACION in varchar2,  V_OBSERVACIONES in  varchar2,
-        v_total_horas in number,
-        todo_ok_Basico out integer,msgBasico out varchar2) is
+/**
+ * INSERTA_AUSENCIAS_RRHH
+ *
+ * @description
+ * Procedimiento para que RRHH inserte ausencias directamente con estado 80 (Concedido).
+ * No requiere proceso de aprobación de JS/JA ya que es creada directamente por RRHH.
+ *
+ * @details
+ * Operaciones principales:
+ * - Validar fechas y formatear horas (completar con ceros a la izquierda)
+ * - Generar secuencias para id_ausencia y id_operacion
+ * - Insertar ausencia con estado 80 (Concedido) directamente
+ * - Actualizar bolsa de horas sindicales (tipos > 500)
+ * - Actualizar bolsa_concilia para ausencias tipo 50
+ * - Registrar en histórico_operaciones
+ *
+ * Estados:
+ * - 80: Concedido (estado directo sin workflow de aprobación)
+ *
+ * @param V_ID_ANO                Año de la ausencia
+ * @param V_ID_FUNCIONARIO        ID del funcionario
+ * @param V_ID_TIPO_FUNCIONARIO   Tipo de funcionario (10=Admin, 21=Policía, 23=Bombero)
+ * @param V_ID_TIPO_AUSENCIA      Código tipo ausencia (50=Concilia, >500=Sindicales)
+ * @param V_FECHA_INICIO          Fecha inicio de la ausencia
+ * @param V_FECHA_FIN             Fecha fin de la ausencia
+ * @param V_HORA_INICIO           Hora inicio (formato HH:MI)
+ * @param V_HORA_FIN              Hora fin (formato HH:MI)
+ * @param V_JUSTIFICACION         SI/NO si está justificada
+ * @param V_OBSERVACIONES         Texto libre con observaciones
+ * @param v_total_horas           Total de horas de la ausencia (en minutos)
+ * @param todo_ok_Basico          OUT 0=Éxito, 1=Error
+ * @param msgBasico               OUT Mensaje resultado
+ *
+ * @notes
+ * - Ausencias tipo > 500: descuenta de HORA_SINDICAL (por mes)
+ * - Ausencias tipo 50: descuenta de BOLSA_CONCILIA (por año)
+ * - No envía notificaciones (creación directa por RRHH)
+ * - Fechas firmado_js/firmado_ja se asignan con fecha actual aunque no hay firma real
+ *
+ * @author Sistema Ausencias RRHH
+ * @date   Actualizado 13/02/2020 (bolsa concilia)
+ * @version 2.0
+ */
+CREATE OR REPLACE PROCEDURE RRHH.INSERTA_AUSENCIAS_RRHH (
+  V_ID_ANO            IN NUMBER,
+  V_ID_FUNCIONARIO    IN NUMBER,
+  V_ID_TIPO_FUNCIONARIO IN NUMBER,
+  V_ID_TIPO_AUSENCIA  IN VARCHAR2,
+  V_FECHA_INICIO      IN DATE,
+  V_FECHA_FIN         IN DATE,
+  V_HORA_INICIO       IN VARCHAR2,
+  V_HORA_FIN          IN VARCHAR2,
+  V_JUSTIFICACION     IN VARCHAR2,
+  V_OBSERVACIONES     IN VARCHAR2,
+  v_total_horas       IN NUMBER,
+  todo_ok_Basico      OUT INTEGER,
+  msgBasico           OUT VARCHAR2
+) IS
 
-i_hora_inicio number;
-i_hora_fin number;
-i_no_hay_permisos number;
-i_num_dias number;
-i_id_tipo_dias number;
-i_unico varchar2(2);
-i_resta_fechas number;
-i_contador_laboral number;
-i_contador_natural number;
-i_contador number;
-i_id_js  varchar2(6);
-i_id_delegado_js varchar2(6);
-i_id_ja  varchar2(6);
-i_id_delegado_ja    varchar2(6);
-i_Estado_permiso number;
-i_fecha_js date;
-i_fecha_ja date;
- i_fecha_rrhh date;
- i_secuencia_operacion number;
- i_secuencia_ausencia number;
- i_fecha varchar2(10);
- i_hora  varchar2(10);
- i_id_ano  varchar2(4);
- correo_v_funcionario varchar2(256);
- correo_js varchar2(256);
- correo_ja varchar2(256);
- i_sender varchar2(256);
- i_recipient varchar2(256);
- I_ccrecipient varchar2(256);
- i_subject varchar2(256);
- I_message varchar2(15000);
- i_nombre_peticion varchar2(256);
- i_desc_tipo_ausencia varchar2(512);
- i_cadena2 varchar2(512);
- i_desc_mensaje varchar2(10000);
- i_formato_fecha_inicio date;
- i_formato_fecha_fin date;
- i_mes_inicio number;
-i_mes_fin number;
-i_mes_actual number;
-i_a�o_inicio number;
-i_a�o_fin number;
-i_a�o_actual number;
+  -- Constantes
+  C_ESTADO_CONCEDIDO        CONSTANT VARCHAR2(2) := '80';
+  C_ESTADO_SOLICITADO       CONSTANT VARCHAR2(2) := '10';
+  C_TIPO_AUSENCIA_CONCILIA  CONSTANT VARCHAR2(3) := '50';
+  C_TIPO_AUSENCIA_SINDICAL  CONSTANT NUMBER := 500;
+  
+  -- Variables estado y fechas
+  i_Estado_permiso        NUMBER;
+  i_fecha_js              DATE;
+  i_fecha_ja              DATE;
+  i_formato_fecha_inicio  DATE;
+  i_formato_fecha_fin     DATE;
+  
+  -- Variables secuencias y fecha/hora
+  i_secuencia_operacion   NUMBER;
+  i_secuencia_ausencia    NUMBER;
+  i_fecha                 VARCHAR2(10);
+  i_hora                  VARCHAR2(10);
+  i_id_ano                VARCHAR2(4);
+  
+  -- Variables control fechas
+  i_mes_inicio            NUMBER;
+  i_mes_fin               NUMBER;
+  i_año_inicio            NUMBER;
 
-begin
-todo_ok_basico:=0;
-msgBasico:='';
+BEGIN
 
-i_mes_inicio:=to_char(V_FECHA_INICIO,'MM');
-i_mes_fin:=to_char(V_FECHA_FIN,'MM');
-i_mes_actual:=to_char(sysdate,'MM');
-
-
-i_a�o_inicio:=to_char(V_FECHA_INICIO,'YYYY');
-i_a�o_fin:=to_char(V_FECHA_FIN,'YYYY');
-i_a�o_actual:=to_char(sysdate,'YYYY');
-
-
-i_formato_fecha_inicio:= to_date(to_char(V_FECHA_INICIO,'DD/MM/YYYY') || V_HORA_INICIO,'DD/MM/YYYY HH24:MI');
-i_formato_fecha_fin:= to_date(to_char(V_FECHA_FIN,'DD/MM/YYYY') || V_HORA_FIN,'DD/MM/YYYY HH24:MI');
-
--- 10 Solicitado
--- 20 Pde. Firma Jefe Secc.
--- 21 Pde. Firma Jefe Area
--- 22 Pde Vo de RRHH.
--- 30 Rechazado Jefe Secc.
--- 31 Rechazado Jefe Area.
--- 32 Denegado RRHH
--- 40 Anulado RRHH
--- 80 Concedido
---obtenemos las persona que tienen que firmar si no tiene personas
---no se deja coger le permiso .
-
-
-
-
---obtenemos el dia y hora, secuencia de la operacion. ,secuencia del ausencia
-select sec_operacion.nextval,sec_ausencia.nextval,to_char(sysdate,'DD/MM/YYYY'),
-      to_char(sysdate,'HH:MI'),to_char(sysdate,'YYYY')
-into  i_secuencia_operacion,i_secuencia_ausencia,i_fecha,i_hora,i_id_ano
- from dual;
-
---FALTARIA ID_USUARIO
-  i_Estado_permiso:=80;
-  i_fecha_js:=sysdate;
-  i_id_js:='';
-  i_id_ja:='';
-  i_fecha_ja:=sysdate;
-
- --INSERT EN AUSENCIAS
- insert into ausencia (
-               id_ausencia,
-               id_ano,
-               id_funcionario,
-               id_tipo_ausencia,
-               id_estado,
-               firmado_js,
-               fecha_js,
-               firmado_ja,
-               fecha_ja,
-               fecha_inicio,
-               fecha_fin,
-               total_horas,
-               id_usuario,
-               fecha_modi,
-               OBSERVACIONES , JUSTIFICADO
-               )
-       vaLues
-               (i_secuencia_ausencia ,
-                V_id_ANO,
-                V_ID_FUNCIONARIO,
-                V_ID_TIPO_AUSENCIA,
-                i_estado_permiso,
-                 i_id_js,
-                to_date(to_char(sysdate,'DD/MM/yy'),'DD/MM/yy'),
-                i_id_ja,
-                to_date(to_char(i_fecha_ja,'DD/MM/yy'),'DD/MM/yy'),
-                i_formato_fecha_inicio,
-                i_formato_fecha_fin,
-                v_total_horas,
-               V_ID_FUNCIONARIO
-               ,to_date(to_char(sysdate,'DD/MM/yy'),'DD/MM/yy'),
-               V_OBSERVACIONES, V_JUSTIFICACION
-                 );
-
-
-
---quito las horas sindicales.
-IF V_ID_TIPO_AUSENCIA > 500 THEN
-
-   UPDATE HORA_SINDICAL
-   SET TOTAL_UTILIZADAS=TOTAL_UTILIZADAS+v_total_horas
-   where
-                id_ano=i_a�o_inicio AND --cambiado calculaba las horas sindicales
-                id_MES=i_mes_inicio and  --cambiado calculaba las horas sindicales
-                id_funcionario=V_ID_FUNCIONARIO AND
-                ID_TIPO_AUSENCIA= V_ID_TIPO_AUSENCIA;
-
-END IF;
---chm 13/02/2020
---quito las horas de las bolsa concilia
-IF V_ID_TIPO_AUSENCIA = 50 THEN
-
-   UPDATE BOLSA_CONCILIA
-   SET
-   utilizadas=nvl(utilizadas,0)+v_total_horas,
-   pendientes_justificar=nvl(pendientes_justificar,0)+v_total_horas
-   where id_ano=i_a�o_inicio AND  id_funcionario=V_ID_FUNCIONARIO;
-
-END IF;
- --Insert en el historico
-   insert into historico_operaciones
-      values(i_secuencia_operacion,
-             i_secuencia_ausencia ,
-             10,
-             v_id_ano,
-             V_ID_FUNCIONARIO,
-             to_Date(i_fecha,'DD/MM/YYYY'),
-             i_hora,
-             'INSERTA AUSENCIA',
-              V_ID_FUNCIONARIO,to_Date(i_fecha,'DD/MM/YYYY'));
-
-
-end INSERTA_AUSENCIAS_RRHH;
+  todo_ok_basico := 0;
+  msgBasico := '';
+  
+  --------------------------------------------------------------------------------
+  -- FASE 1: VALIDAR Y FORMATEAR FECHAS
+  --------------------------------------------------------------------------------
+  
+  i_mes_inicio := TO_CHAR(V_FECHA_INICIO, 'MM');
+  i_mes_fin := TO_CHAR(V_FECHA_FIN, 'MM');
+  
+  i_año_inicio := TO_CHAR(V_FECHA_INICIO, 'YYYY');
+  
+  -- Formatear fecha-hora completa
+  i_formato_fecha_inicio := TO_DATE(TO_CHAR(V_FECHA_INICIO, 'DD/MM/YYYY') || V_HORA_INICIO, 'DD/MM/YYYY HH24:MI');
+  i_formato_fecha_fin := TO_DATE(TO_CHAR(V_FECHA_FIN, 'DD/MM/YYYY') || V_HORA_FIN, 'DD/MM/YYYY HH24:MI');
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: GENERAR SECUENCIAS Y PREPARAR INSERCIÓN
+  --------------------------------------------------------------------------------
+  
+  SELECT sec_operacion.NEXTVAL,
+         sec_ausencia.NEXTVAL,
+         TO_CHAR(SYSDATE, 'DD/MM/YYYY'),
+         TO_CHAR(SYSDATE, 'HH:MI'),
+         TO_CHAR(SYSDATE, 'YYYY')
+  INTO   i_secuencia_operacion,
+         i_secuencia_ausencia,
+         i_fecha,
+         i_hora,
+         i_id_ano
+  FROM   dual;
+  
+  -- Estado directo a Concedido (RRHH crea con aprobación automática)
+  i_Estado_permiso := TO_NUMBER(C_ESTADO_CONCEDIDO);
+  i_fecha_js := SYSDATE;
+  i_fecha_ja := SYSDATE;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: INSERTAR AUSENCIA CON ESTADO CONCEDIDO
+  --------------------------------------------------------------------------------
+  
+  INSERT INTO ausencia (
+    id_ausencia,
+    id_ano,
+    id_funcionario,
+    id_tipo_ausencia,
+    id_estado,
+    firmado_js,
+    fecha_js,
+    firmado_ja,
+    fecha_ja,
+    fecha_inicio,
+    fecha_fin,
+    total_horas,
+    id_usuario,
+    fecha_modi,
+    OBSERVACIONES,
+    JUSTIFICADO
+  ) VALUES (
+    i_secuencia_ausencia,
+    V_id_ANO,
+    V_ID_FUNCIONARIO,
+    V_ID_TIPO_AUSENCIA,
+    i_estado_permiso,
+    '',
+    TO_DATE(TO_CHAR(SYSDATE, 'DD/MM/yy'), 'DD/MM/yy'),
+    '',
+    TO_DATE(TO_CHAR(i_fecha_ja, 'DD/MM/yy'), 'DD/MM/yy'),
+    i_formato_fecha_inicio,
+    i_formato_fecha_fin,
+    v_total_horas,
+    V_ID_FUNCIONARIO,
+    TO_DATE(TO_CHAR(SYSDATE, 'DD/MM/yy'), 'DD/MM/yy'),
+    V_OBSERVACIONES,
+    V_JUSTIFICACION
+  );
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: ACTUALIZAR BOLSA HORAS SINDICALES (tipos > 500)
+  --------------------------------------------------------------------------------
+  
+  IF TO_NUMBER(V_ID_TIPO_AUSENCIA) > C_TIPO_AUSENCIA_SINDICAL THEN
+    
+    UPDATE HORA_SINDICAL
+    SET    TOTAL_UTILIZADAS = TOTAL_UTILIZADAS + v_total_horas
+    WHERE  id_ano = i_año_inicio
+      AND  id_MES = i_mes_inicio
+      AND  id_funcionario = V_ID_FUNCIONARIO
+      AND  ID_TIPO_AUSENCIA = V_ID_TIPO_AUSENCIA;
+      
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 5: ACTUALIZAR BOLSA CONCILIA (tipo 50)
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_TIPO_AUSENCIA = C_TIPO_AUSENCIA_CONCILIA THEN
+    
+    UPDATE BOLSA_CONCILIA
+    SET    utilizadas = NVL(utilizadas, 0) + v_total_horas,
+           pendientes_justificar = NVL(pendientes_justificar, 0) + v_total_horas
+    WHERE  id_ano = i_año_inicio
+      AND  id_funcionario = V_ID_FUNCIONARIO;
+      
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 6: REGISTRAR EN HISTÓRICO
+  --------------------------------------------------------------------------------
+  
+  INSERT INTO historico_operaciones
+  VALUES (
+    i_secuencia_operacion,
+    i_secuencia_ausencia,
+    TO_NUMBER(C_ESTADO_SOLICITADO),
+    V_id_ano,
+    V_ID_FUNCIONARIO,
+    TO_DATE(i_fecha, 'DD/MM/YYYY'),
+    i_hora,
+    'INSERTA AUSENCIA',
+    V_ID_FUNCIONARIO,
+    TO_DATE(i_fecha, 'DD/MM/YYYY')
+  );
+  
+  COMMIT;
+  
+EXCEPTION
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('Error en inserta_ausencias_rrhh: ' || SQLERRM);
+    ROLLBACK;
+    todo_ok_basico := 1;
+    msgBasico := 'Error en inserta_ausencias_rrhh: ' || SQLERRM;
+    
+END INSERTA_AUSENCIAS_RRHH;
 /
 
