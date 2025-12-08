@@ -4,7 +4,7 @@ create or replace function rrhh.GET_USERS(V_PROPIEDAD in varchar2,V_login in var
    l_ldap_host    VARCHAR2(256) := 'leonardo.aytosa.inet';
   l_ldap_port    VARCHAR2(256) := '389';
   l_ldap_user    VARCHAR2(256) := 'intranet@aytosa.inet';
-  l_ldap_passwd  VARCHAR2(256) := 'CE$jkf.2d';
+  l_ldap_passwd  VARCHAR2(256) := '2d';
  -- l_ldap_user    VARCHAR2(256) := 'carlos@aytosa.inet';
   --l_ldap_passwd  VARCHAR2(256) := '';
   p_sFiltro       varchar2(1024);
