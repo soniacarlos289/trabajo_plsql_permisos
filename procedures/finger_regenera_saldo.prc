@@ -1,144 +1,140 @@
-CREATE OR REPLACE PROCEDURE RRHH."FINGER_REGENERA_SALDO" (V_ID_funcionario in varchar2,
-                                                V_PERIODO        in varchar2,V_tipo_funci in number) is
+CREATE OR REPLACE PROCEDURE RRHH.FINGER_REGENERA_SALDO (
+  v_id_funcionario IN VARCHAR2,
+  v_periodo        IN VARCHAR2,
+  v_tipo_funci     IN NUMBER
+) IS
+  /**
+   * @description Regenera el cálculo de saldos finger para un periodo determinado
+   * @details Proceso que recalcula saldos de fichaje para funcionarios activos en periodo especificado.
+   *          Procesa funcionarios con contrato vigente o sin fecha de baja.
+   *          - Tipo 21 (Policía): Utiliza cálculo especializado finger_calcula_saldo_policia
+   *          - Otros tipos: Utiliza cálculo general finger_calcula_saldo
+   *          - Incluye hardcode de funcionarios 101207 y 10013 (tipo 10=Administrativo)
+   *          - Listas comentadas de funcionarios específicos (mantenimiento histórico)
+   * @param v_id_funcionario ID funcionario específico o 0 para todos los activos
+   * @param v_periodo Periodo a recalcular formato 'MMAAAA' (ej: '012023')
+   * @param v_tipo_funci Tipo de funcionario filtro (10=Administrativo, 21=Policía, 23=Bombero) o 0 para todos
+   * @notes 
+   *   - Solo procesa funcionarios activos (sin fecha_baja o baja futura o con contrato vigente)
+   *   - Periodo: usa función devuelve_periodo(v_periodo) para convertir formato
+   *   - Recorre todos los días del calendario laboral del periodo
+   *   - Listas comentadas: mantener por referencia histórica (backups, mantenimiento)
+   *   - UNION hardcoded: agrega funcionarios 101207 y 10013 si coinciden con filtros
+   */
 
-  i_id_dia            date;
-  i_id_funcionario    varchar2(10);
-  i_tipo_funcionario2 number;
+  -- Constantes
+  C_TIPO_FUNC_POLICIA    CONSTANT NUMBER := 21;
+  C_TIPO_FUNC_ADMIN      CONSTANT NUMBER := 10;
+  C_FUNC_HARDCODE_1      CONSTANT VARCHAR2(10) := '101207';
+  C_FUNC_HARDCODE_2      CONSTANT VARCHAR2(10) := '10013';
 
-  --Funcionarios en activo
-  CURSOR C0 is
- select distinct id_funcionario,nvl(tipo_funcionario2, 0)
-      from personal_new
-      where  --chm 16/03/2021 fecha_fin_contrato pot fecha_bajaa
-       (
-       ((fecha_baja is  null and fecha_fin_contrato is not null) OR 
-                                  (fecha_baja >sysdate)  OR
-                                  (fecha_baja is null  and fecha_fin_contrato is  null )   
-       )    
-        and
-       (id_funcionario=V_id_funcionario OR 0=V_id_funcionario) and
-       (tipo_funcionario2 = V_tipo_funci OR 0 = V_tipo_funci) )
-     /* and  id_funcionario in
-      (101149,
-962925,
-110012,
-961093,
-960875,
-101249,
-962602,
-510599,
-60830,
-101282,
-961253,
-600092,
-101209,
-962407,
-101198,
-961954,
-962153,
-62006,
+  -- Variables
+  i_id_dia            DATE;
+  i_id_funcionario    VARCHAR2(10);
+  i_tipo_funcionario2 NUMBER;
 
-600125
-)*/
+  -- Cursor: Funcionarios activos + hardcoded
+  CURSOR c0 IS
+    SELECT DISTINCT 
+           id_funcionario,
+           NVL(tipo_funcionario2, 0) AS tipo_func
+    FROM personal_new
+    WHERE (
+            -- Funcionario activo: sin fecha_baja o con fecha_baja futura o con contrato vigente
+            ((fecha_baja IS NULL AND fecha_fin_contrato IS NOT NULL) OR 
+             (fecha_baja > SYSDATE) OR
+             (fecha_baja IS NULL AND fecha_fin_contrato IS NULL))
+          )
+      AND (id_funcionario = v_id_funcionario OR 0 = v_id_funcionario)
+      AND (tipo_funcionario2 = v_tipo_funci OR 0 = v_tipo_funci)
+    /* Listas comentadas - mantener por referencia histórica
+    AND id_funcionario IN (
+      101149, 962925, 110012, 961093, 960875, 101249, 962602, 510599,
+      60830, 101282, 961253, 600092, 101209, 962407, 101198, 961954,
+      962153, 62006, 600125
+    )
+    -- Lista Mantenimiento
+    AND id_funcionario IN (
+      101218, 101219, 101220, 101221, 101223, 101238, 101240, 101247,
+      101250, 101260, 101261, 101262, 101263, 101269, 101271, 101272,
+      101273, 101276, 1141, 39082, 39106, 501357, 50175, 502331,
+      502332, 504442, 510595, 510599, 510600, 510601, 510606, 510607,
+      510608, 52003, 53002, 55106, 65147, 961073, 962072
+    )
+    */
+    UNION
+    -- Funcionario hardcoded 101207
+    SELECT C_FUNC_HARDCODE_1, C_TIPO_FUNC_ADMIN
+    FROM DUAL
+    WHERE TO_NUMBER(C_FUNC_HARDCODE_1) = v_id_funcionario
+    UNION
+    -- Funcionario hardcoded 10013
+    SELECT C_FUNC_HARDCODE_2, C_TIPO_FUNC_ADMIN
+    FROM DUAL
+    WHERE TO_NUMBER(C_FUNC_HARDCODE_2) = v_id_funcionario
+    ORDER BY 1;
 
---Mantenimiento
-/*and  id_funcionario in
-(
-101218,
-101219,
-101220,
-101221,
-101223,
-101238,
-101240,
-101247,
-101250,
-101260,
-101261,
-101262,
-101263,
-101269,
-101271,
-101272,
-101273,
-101276,
-1141,
-39082,
-39106,
-501357,
-50175,
-502331,
-502332,
-504442,
-510595,
-510599,
-510600,
-510601,
-510606,
-510607,
-510608,
-52003,
-53002,
-55106,
-65147,
-961073,
-962072
+  -- Cursor: Días del periodo en calendario laboral
+  CURSOR c2 IS
+    SELECT TRUNC(id_dia) AS dia_calc
+    FROM webperiodo o
+    CROSS JOIN calendario_laboral cl
+    WHERE id_dia BETWEEN inicio AND fin
+      AND mes || ano = devuelve_periodo(v_periodo)
+      AND id_dia < SYSDATE
+    ORDER BY id_dia;
 
-)*/
+BEGIN
 
-
-
- union
- select   to_char(101207) ,10 from dual where 101207=v_id_funcionario
- union
- select  to_char(10013),10   from dual where 10013=v_id_funcionario
- order by 1;
-
-  --FICHAJES
-  CURSOR C2 is
-    select to_date(to_char(id_dia, 'dd/mm/yyyy'), 'dd/mm/yyyy')
-      from webperiodo o, calendario_laboral cl
-     where id_dia between inicio and fin
-       and
-          --ano=2018
-           mes || ano =devuelve_periodo(V_PERIODO)
-             --and periodo > '062018'
-            --ano ||lpad(mes,2,'0') > '201811'
-       and id_dia < sysdate
-     order by id_dia;
-
-Begin
-
-  --abrimos cursor.
-  OPEN C0;
+  -- **********************************
+  -- FASE 1: Iterar funcionarios activos
+  -- **********************************
+  OPEN c0;
   LOOP
-    FETCH C0
-      into i_id_funcionario, i_tipo_funcionario2;
-    EXIT WHEN C0%NOTFOUND;
+    FETCH c0 INTO i_id_funcionario, i_tipo_funcionario2;
+    EXIT WHEN c0%NOTFOUND;
 
-    --FECHA DE CALCULO DE SALDO
-    OPEN C2;
-
+    -- **********************************
+    -- FASE 2: Iterar días del periodo
+    -- **********************************
+    OPEN c2;
     LOOP
-      FETCH C2
-        INTO I_ID_DIA;
-      EXIT WHEN C2%NOTFOUND;
+      FETCH c2 INTO i_id_dia;
+      EXIT WHEN c2%NOTFOUND;
 
-      IF i_tipo_funcionario2 <> 21 THEN
-        finger_calcula_saldo(i_id_funcionario, I_ID_DIA);
+      -- **********************************
+      -- FASE 3: Calcular saldo según tipo funcionario
+      -- **********************************
+      IF i_tipo_funcionario2 <> C_TIPO_FUNC_POLICIA THEN
+        -- Cálculo estándar para no-policías
+        finger_calcula_saldo(i_id_funcionario, i_id_dia);
       ELSE
-        finger_calcula_saldo_policia(i_id_funcionario, I_ID_DIA);
+        -- Cálculo especializado para policías
+        finger_calcula_saldo_policia(i_id_funcionario, i_id_dia);
       END IF;
 
     END LOOP;
-    CLOSE C2;
+    CLOSE c2;
 
   END LOOP;
-  CLOSE C0;
+  CLOSE c0;
 
-  commit;
+  -- **********************************
+  -- FASE 4: Confirmar transacción
+  -- **********************************
+  COMMIT;
 
-  --  rollback;
-end FINGER_REGENERA_SALDO;
+EXCEPTION
+  WHEN OTHERS THEN
+    IF c0%ISOPEN THEN
+      CLOSE c0;
+    END IF;
+    IF c2%ISOPEN THEN
+      CLOSE c2;
+    END IF;
+    ROLLBACK;
+    RAISE;
+
+END FINGER_REGENERA_SALDO;
 /
 
