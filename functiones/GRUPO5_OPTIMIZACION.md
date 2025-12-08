@@ -227,7 +227,7 @@ Las funciones LDAP contienen **vulnerabilidades de seguridad críticas**:
 ```plsql
 -- ⚠️ CRÍTICO: Contraseña en texto plano en código fuente
 C_LDAP_USER   := 'intranet@aytosa.inet'
-C_LDAP_PASSWD := 'CE$jkf.2d'  -- Visible en código y logs
+C_LDAP_PASSWD := ''  -- Visible en código y logs
 ```
 
 **Riesgo:** Alto  
