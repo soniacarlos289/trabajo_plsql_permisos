@@ -1,215 +1,225 @@
-CREATE OR REPLACE PROCEDURE RRHH."FINGER_LEE_TRANS_HIST" is
+CREATE OR REPLACE PROCEDURE RRHH.FINGER_LEE_TRANS_HIST IS
+  /**
+   * @description Lee y procesa transacciones históricas de fichaje desde relojes para carga masiva
+   * @details Procedimiento batch que importa transacciones históricas desde tabla transacciones (relojes) 
+   *          a fichaje_funcionario_tran. Similar a finger_lee_trans pero sin filtros de fecha/PIN específicos.
+   *          Proceso:
+   *          1. Busca última transacción cargada (max numserie)
+   *          2. Lee transacciones posteriores desde fecha 01/01/2019
+   *          3. Identifica funcionario por PIN/numtarjeta
+   *          4. Obtiene jornada laboral del funcionario
+   *          5. Calcula periodo de fichaje
+   *          6. Inserta en fichaje_funcionario_tran
+   *          
+   *          Tipos transacción válidos: 2, 55, 39, 40, 4865, 4356, 4355, numserie=0, dedo=17/49 con tipo 3
+   * @notes 
+   *   - Carga incremental: solo procesa claveomesa > max(numserie) existente
+   *   - Fecha mínima: 01/01/2019
+   *   - Reloj 'MA' se convierte a '91'
+   *   - Busca funcionario en persona (omesa) por numtarjeta
+   *   - Solo funcionarios activos (sin fecha_baja o baja futura en persona y personal_new)
+   *   - Secuencia: sec_id_fichaje_trans.nextval
+   *   - DUP_VAL_ON_INDEX: transacción duplicada, se ignora
+   *   - Tipo 21 (Policía): usa turno_policia para determinar periodo
+   *   - Otros tipos: usa devuelve_periodo_fichaje
+   */
 
-   i_id_funcionario number;
-   v_pin            varchar2(4);
-   i_reloj          number;
-   i_ausencia       number;
-   i_numserie       number;
-   i_claveomesa     number;
-   d_fecha_fichaje  date;
-   d_audit_fecha    date;
-   v_audit_usuario  number;
-   i_tipotrans      number;
-   i_p1d           number;
-   i_p1h            number;
-   i_p2d            number;
-   i_p2h            number;
-   i_p3d            number;
-   i_p3h            number;
-   i_po1d           number;
-   i_po1h            number;
-   i_po2d            number;
-   i_po2h            number;
-   i_po3d            number;
-   i_po3h            number;
-   i_horas_f        number;
-   i_periodo        varchar2(4);
-   i_tipo_funcionario2 number;
-   i_encontrado     number;
-   I_SIN_CALENDARIO number;
-   hinicio          number;
-   hfin             number;
+  -- Constantes
+  C_TIPO_FUNC_POLICIA    CONSTANT NUMBER := 21;
+  C_TIPO_TRANS_2         CONSTANT NUMBER := 2;
+  C_TIPO_TRANS_55        CONSTANT NUMBER := 55;
+  C_TIPO_TRANS_39        CONSTANT NUMBER := 39;
+  C_TIPO_TRANS_40        CONSTANT NUMBER := 40;
+  C_TIPO_TRANS_4865      CONSTANT NUMBER := 4865;
+  C_TIPO_TRANS_4356      CONSTANT NUMBER := 4356;
+  C_TIPO_TRANS_4355      CONSTANT NUMBER := 4355;
+  C_DEDO_17              CONSTANT VARCHAR2(2) := '17';
+  C_DEDO_49              CONSTANT VARCHAR2(2) := '49';
+  C_TIPO_TRANS_3         CONSTANT VARCHAR2(1) := '3';
+  C_RELOJ_MA             CONSTANT VARCHAR2(2) := 'MA';
+  C_RELOJ_91             CONSTANT VARCHAR2(2) := '91';
+  C_FECHA_MINIMA         CONSTANT DATE := TO_DATE('01/01/2019', 'DD/MM/YYYY');
+  C_PREFIJO_POLICIA      CONSTANT VARCHAR2(1) := 'P';
 
-   i_par_fichaje    number;
-   i_id_secuencia   number;
+  -- Variables funcionario
+  i_id_funcionario    NUMBER;
+  i_tipo_funcionario2 NUMBER;
 
-    v_fichaje_nuevo varchar2(115);
-    v_fecha_nuevo   varchar2(115);
-    v_fichaje_viejo varchar2(115);
-    v_fecha_viejo   varchar2(115);
+  -- Variables transacción
+  v_pin               VARCHAR2(4);
+  d_fecha_fichaje     DATE;
+  i_reloj             NUMBER;
+  i_ausencia          NUMBER;
+  i_numserie          NUMBER;
+  i_claveomesa        NUMBER;
+  d_audit_fecha       DATE;
+  v_audit_usuario     NUMBER;
+  i_tipotrans         NUMBER;
+  i_horas_f           NUMBER;
+  i_periodo           VARCHAR2(4);
+  i_id_secuencia      NUMBER;
 
- --Funcionarios en activo
- CURSOR C1 (clave_emp number) is
-      select pin,
-             to_date(to_char(fecha,'dd/mm/yyyy') || ' ' || to_char(hora,'hh24:mi'),'dd/mm/yyyy hh24:mi')
-                      as  FECHA_FICHAJE,
-            DECODE(numero,'MA','91',NUMERO) as  RELOJ,
-            DECODE(CODINCI,NULL,0,1) as AUSENCIA,
-            claveomesa   as numserie,
-           to_date(to_char(fechaCAP,'dd/mm/yyyy') || ' ' || to_char(HORACAP,'hh24:mi'),'dd/mm/yyyy hh24:mi')
-                        as  audit_fecha,
-            '000000'      as  audit_usuario,
-            tipotrans    as tipotrans      ,
-            to_char(hora,'hh24mi')   as   horas_f
-      from transacciones
-     where pin<>'0000'
-         and ((tipotrans = '2') OR (numserie = 0) or
-            (dedo='17' and tipotrans='3') OR
-           (tipotrans = '2') OR
-           (dedo='49' and tipotrans='3') OR
-           (tipotrans in (55,39,40,4865,4356,4355)))
-            and  Claveomesa>clave_emp and length(pin)<= 4
-           AND FECHA>TO_DATE('01/01/2019','dd/MM/YYYY')
+  -- Variables jornada
+  i_p1d               NUMBER;
+  i_p1h               NUMBER;
+  i_p2d               NUMBER;
+  i_p2h               NUMBER;
+  i_p3d               NUMBER;
+  i_p3h               NUMBER;
+  i_po1d              NUMBER;
+  i_po1h              NUMBER;
+  i_po2d              NUMBER;
+  i_po2h              NUMBER;
+  i_po3d              NUMBER;
+  i_po3h              NUMBER;
+  i_contar_comida     NUMBER;
+  i_libre             NUMBER;
+  i_turnos            NUMBER;
+  i_sin_calendario    NUMBER;
 
-        order by claveomesa asc;
-Begin
- i_claveomesa :=0;
---Busco ultimo registro cargado
+  -- Cursor: Transacciones históricas posteriores a última carga
+  CURSOR c1 (p_clave_emp NUMBER) IS
+    SELECT 
+           pin,
+           TO_DATE(TO_CHAR(fecha, 'DD/MM/YYYY') || ' ' || TO_CHAR(hora, 'HH24:MI'), 'DD/MM/YYYY HH24:MI') AS fecha_fichaje,
+           DECODE(numero, C_RELOJ_MA, C_RELOJ_91, numero) AS reloj,
+           DECODE(codinci, NULL, 0, 1) AS ausencia,
+           claveomesa AS numserie,
+           TO_DATE(TO_CHAR(fechacap, 'DD/MM/YYYY') || ' ' || TO_CHAR(horacap, 'HH24:MI'), 'DD/MM/YYYY HH24:MI') AS audit_fecha,
+           '000000' AS audit_usuario,
+           tipotrans AS tipotrans,
+           TO_CHAR(hora, 'HH24MI') AS horas_f
+    FROM transacciones
+    WHERE pin <> '0000'
+      AND (
+           (tipotrans = C_TIPO_TRANS_2) OR 
+           (numserie = 0) OR
+           (dedo = C_DEDO_17 AND tipotrans = C_TIPO_TRANS_3) OR
+           (dedo = C_DEDO_49 AND tipotrans = C_TIPO_TRANS_3) OR
+           (tipotrans IN (C_TIPO_TRANS_55, C_TIPO_TRANS_39, C_TIPO_TRANS_40, 
+                          C_TIPO_TRANS_4865, C_TIPO_TRANS_4356, C_TIPO_TRANS_4355))
+          )
+      AND claveomesa > p_clave_emp
+      AND LENGTH(pin) <= 4
+      AND fecha > C_FECHA_MINIMA
+    ORDER BY claveomesa ASC;
+
 BEGIN
-    SELECT   NVL(max(NUMSERIE),0)
-             into i_claveomesa
-     FROM FICHAJE_FUNCIONARIO_TRAN;
-    EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-       i_claveomesa :=0;
-END;
 
-OPEN C1(i_claveomesa);
-
-  LOOP
-    FETCH C1
-      into  v_pin, d_fecha_fichaje,  i_reloj,   i_ausencia,
-             i_numserie,  d_audit_fecha, v_audit_usuario,i_tipotrans,   i_horas_f ;
-    EXIT WHEN C1%NOTFOUND;
-
-  I_ID_FUNCIONARIO :=0;
-  --buscamos en la funcionario este activo del fichaje
+  -- **********************************
+  -- FASE 1: Obtener última transacción cargada
+  -- **********************************
+  i_claveomesa := 0;
+  
   BEGIN
-    SELECT
-      distinct P.id_FUNCIONARIO,tipo_funcionario2
-      into i_id_funcionario,i_tipo_funcionario2
-    FROM
-      personal_new p  ,      apliweb_usuario u, persona ope
-    WHERE ope.numtarjeta=V_pin and
-          codigo  = u.id_FICHAJE and
-          (ope.fechabaja > sysdate OR ope.fechabaja is null) and
-          (
-          (p.fecha_baja is  null and p.fecha_fin_contrato is not null) OR 
-                                  (p.fecha_baja >sysdate)  OR
-                                  (p.fecha_baja is null  and p.fecha_fin_contrato is  null )) and
-          lpad(p.id_funcionario,6,0)=lpad(u.id_funcionario,6,0) and
-       rownum <2;
-    EXCEPTION
+    SELECT NVL(MAX(numserie), 0)
+    INTO i_claveomesa
+    FROM fichaje_funcionario_tran;
+  EXCEPTION
     WHEN NO_DATA_FOUND THEN
-       I_ID_FUNCIONARIO :=0;
+      i_claveomesa := 0;
   END;
 
-  I_SIN_CALENDARIO :=1;
-  --No hacer nada Si no hay funcionario
-  IF  I_ID_FUNCIONARIO <> 0 THEN
+  -- **********************************
+  -- FASE 2: Iterar transacciones históricas nuevas
+  -- **********************************
+  OPEN c1(i_claveomesa);
+  LOOP
+    FETCH c1 INTO v_pin, d_fecha_fichaje, i_reloj, i_ausencia,
+                  i_numserie, d_audit_fecha, v_audit_usuario, i_tipotrans, i_horas_f;
+    EXIT WHEN c1%NOTFOUND;
 
-      --buscamos periodo del fichaje
-      BEGIN
-      select to_char(p1_fle_desde,'hh24mi') as p1d,
-            to_char(p1_fle_hasta,'hh24mi') as p1h,
-            to_char(p2_fle_desde,'hh24mi') as p2d,
-            to_char(p2_fle_hasta,'hh24mi') as p2h,
-            to_char(p3_fle_desde,'hh24mi') as p3d,
-            to_char(p3_fle_hasta,'hh24mi') as p3h,
-            to_char(p1_obl_desde,'hh24mi') as po1d,
-            to_char(p1_obl_hasta,'hh24mi') as po1h,
-            to_char(p2_obl_desde,'hh24mi') as po2d,
-            to_char(p2_obl_hasta,'hh24mi') as po2h,
-            to_char(p3_obl_desde,'hh24mi') as po3d,
-            to_char(p3_obl_hasta,'hh24mi') as po3h
-            into  i_p1d,i_p1h,
-                  i_p2d,i_p2h,
-                  i_p3d,i_p3h ,
-                  i_po1d,i_po1h,
-                  i_po2d,i_po2h,
-                  i_po3d,i_po3h
-        from FICHAJE_CALENDARIO_JORNADA t, fichaje_funcionario_jornada ff
-        where t.id_calendario=ff.id_calendario and
-           id_funcionario=I_id_funcionario and
-           dia=DECODE(to_char(D_fecha_fichaje,'d'),1,8, to_char(D_fecha_fichaje,'d'))
-            and  to_date('01/01/2018','DD/mm/YYYY') between
-                ff.fecha_inicio
-            and nvl(ff.fecha_fin,sysdate+1)
-            and  to_date('01/01/2018','DD/mm/YYYY') between
-                t.fecha_inicio
-            and nvl(t.fecha_fin,sysdate+1);
-       EXCEPTION
-       WHEN NO_DATA_FOUND THEN
-           I_SIN_CALENDARIO :=0;
-       END;
+    i_id_funcionario := 0;
 
-    IF  I_SIN_CALENDARIO <> 0 THEN
+    -- **********************************
+    -- FASE 3: Identificar funcionario por PIN/numtarjeta
+    -- **********************************
+    BEGIN
+      SELECT DISTINCT 
+             p.id_funcionario,
+             tipo_funcionario2
+      INTO i_id_funcionario, i_tipo_funcionario2
+      FROM personal_new p
+      INNER JOIN apliweb_usuario u ON LPAD(p.id_funcionario, 6, 0) = LPAD(u.id_funcionario, 6, 0)
+      INNER JOIN persona ope ON codigo = u.id_fichaje
+      WHERE ope.numtarjeta = v_pin
+        AND (ope.fechabaja > SYSDATE OR ope.fechabaja IS NULL)
+        AND ((p.fecha_baja IS NULL AND p.fecha_fin_contrato IS NOT NULL) OR 
+             (p.fecha_baja > SYSDATE) OR
+             (p.fecha_baja IS NULL AND p.fecha_fin_contrato IS NULL))
+        AND ROWNUM < 2;
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_id_funcionario := 0;
+    END;
 
-      IF i_tipo_funcionario2 <> 21 then --no turnos policia
-        IF  i_horas_f < i_p1d then
-          i_periodo:='P1';
+    -- **********************************
+    -- FASE 4: Procesar si funcionario válido
+    -- **********************************
+    IF i_id_funcionario <> 0 THEN
+
+      i_sin_calendario := 1;
+
+      -- Obtener configuración jornada
+      finger_busca_jornada_fun(
+        i_id_funcionario, d_fecha_fichaje,
+        i_p1d, i_p1h, i_p2d, i_p2h, i_p3d, i_p3h,
+        i_po1d, i_po1h, i_po2d, i_po2h, i_po3d, i_po3h,
+        i_contar_comida, i_libre, i_turnos, i_sin_calendario
+      );
+
+      -- **********************************
+      -- FASE 5: Determinar periodo de fichaje
+      -- **********************************
+      IF i_sin_calendario <> 0 THEN
+
+        IF i_tipo_funcionario2 <> C_TIPO_FUNC_POLICIA THEN
+          -- No policía: calcular periodo estándar
+          i_periodo := devuelve_periodo_fichaje(i_id_funcionario, v_pin, d_fecha_fichaje, i_horas_f);
+        ELSE
+          -- Policía: obtener turno
+          i_periodo := C_PREFIJO_POLICIA || turno_policia(i_numserie, v_pin);
         END IF;
-
-        IF i_p1d <= i_horas_f and i_horas_f  <=i_p1h then
-             i_periodo:='P1';
-        END IF;
-
-        IF  i_horas_f >= i_p1h and i_p2h is null  then
-          i_periodo:='P1';
-        ELSE IF   i_horas_f  >i_p1h and i_p2d> i_horas_f then
-                          i_periodo:='P1';
-             END IF;
-        END IF;
-
-        IF i_p2d <= i_horas_f and i_horas_f  <= i_p2h then
-                    i_periodo:='P2';
-        END IF;
-
-        IF  i_horas_f >= i_p2h and i_p3h is null  then
-          i_periodo:='P2';
-        END IF;
-
-        IF i_p3d <= i_horas_f and i_horas_f  <= i_p3h then
-                    i_periodo:='P3';
-        END IF;
-
-          IF  i_horas_f > i_p3h then
-          i_periodo:='P3';
-        END IF;
-
-
-
-
-      ELSE ---POLICIAS
-
-       i_periodo := 'P' ||turno_policia(i_Claveomesa, V_pin);
-
 
       END IF;
 
+      -- **********************************
+      -- FASE 6: Insertar transacción procesada
+      -- **********************************
+      i_id_secuencia := sec_id_fichaje_trans.NEXTVAL;
+      
+      BEGIN
+        INSERT INTO fichaje_funcionario_tran (
+          id_sec, id_funcionario, pin, fecha_fichaje, ausencia,
+          numserie, reloj, audit_usuario, audit_fecha, tipotrans, periodo
+        ) VALUES (
+          i_id_secuencia, i_id_funcionario, v_pin, d_fecha_fichaje, i_ausencia,
+          i_numserie, i_reloj, v_audit_usuario, d_audit_fecha, i_tipotrans, i_periodo
+        );
+      EXCEPTION
+        WHEN DUP_VAL_ON_INDEX THEN
+          NULL; -- Transacción duplicada, ignorar
+      END;
+
+    END IF; -- Fin IF funcionario válido
+
+    COMMIT;
+
+  END LOOP;
+  CLOSE c1;
+
+  -- **********************************
+  -- FASE 7: Confirmar transacción final
+  -- **********************************
+  COMMIT;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    IF c1%ISOPEN THEN
+      CLOSE c1;
     END IF;
-         i_id_secuencia:=sec_id_fichaje_trans.nextval;
-       insert into fichaje_funcionario_tran
-      (id_sec, id_funcionario, pin, fecha_fichaje, ausencia, numserie, reloj, audit_usuario, audit_fecha,tipotrans,periodo)
-      values
-      (i_id_secuencia  , I_id_funcionario, v_pin, D_fecha_fichaje, I_ausencia, I_numserie, I_reloj, v_audit_usuario, D_audit_fecha,i_tipotrans,i_periodo);
+    ROLLBACK;
+    RAISE;
 
-
-  END IF;--IDFUNCIONARIO
-
-
-
-
-
-
-
-
-commit;
-END LOOP;
-CLOSE C1;
-
-
---  rollback;
-end FINGER_LEE_TRANS_hist;
+END FINGER_LEE_TRANS_HIST;
 /
-
