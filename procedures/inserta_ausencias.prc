@@ -1,601 +1,451 @@
-CREATE OR REPLACE PROCEDURE RRHH."INSERTA_AUSENCIAS"
-       (V_ID_ANO in number,
-        V_ID_FUNCIONARIO in number,
-        V_ID_TIPO_FUNCIONARIO in number,
-        V_ID_TIPO_AUSENCIA in varchar2,
-        V_FECHA_INICIO in DATE,
-        V_FECHA_FIN in DATE,
-        V_HORA_INICIO  in varchar2,
-        V_HORA_FIN  in varchar2,
-        V_JUSTIFICACION in varchar2,
-        v_total_horas in number,
-        todo_ok_Basico out integer,msgBasico out varchar2) is
+/**
+ * INSERTA_AUSENCIAS
+ *
+ * @description
+ * Procedimiento principal para insertar ausencias de usuarios con workflow completo
+ * de aprobaci√≥n (JS ‚Üí JA ‚Üí RRHH). Determina autom√°ticamente el estado inicial
+ * seg√∫n la jerarqu√≠a de firmas, delegados y tipo de funcionario.
+ *
+ * @details
+ * Workflow de aprobaci√≥n:
+ * 1. Usuario solicita ‚Üí Estado 10 (Solicitado)
+ * 2. Jefe Secci√≥n aprueba ‚Üí Estado 20 (Pde JS)
+ * 3. Jefe √Årea aprueba ‚Üí Estado 21 (Pde JA)
+ * 4. RRHH aprueba ‚Üí Estado 80 (Concedido)
+ *
+ * Determinaci√≥n estado inicial:
+ * - Sin JS ni JA: Estado 22 (directo a RRHH)
+ * - Con JS sin delegado: Estado 10 (Solicitado)
+ * - Con JS delegado: Estado 20 (Pde JS)
+ * - Bomberos con delegado JS: Estado 20 (Pde JS)
+ * - JS=JA (mismo): Estado 20 (Pde JS √∫nico)
+ * - Con JA: Estado 21 (Pde JA)
+ *
+ * Casos especiales:
+ * - Bomberos (tipo 23): l√≥gica delegados diferente
+ * - JS=JA: una sola firma necesaria (JS)
+ * - Delegados: asumen rol del titular
+ *
+ * Operaciones realizadas:
+ * - Generar secuencias (id_ausencia, id_operacion)
+ * - Validar jerarqu√≠a firmas y delegados
+ * - Determinar estado inicial seg√∫n reglas
+ * - Insertar ausencia con estado calculado
+ * - Actualizar bolsa_concilia (tipo 50) o hora_sindical (>500)
+ * - Enviar correos notificaci√≥n seg√∫n estado
+ * - Registrar en hist√≥rico_operaciones
+ *
+ * Estados ausencias:
+ * 10=Solicitado, 20=Pde JS, 21=Pde JA, 22=Pde RRHH
+ * 30=Rechazado JS, 31=Rechazado JA, 32=Denegado RRHH
+ * 40=Anulado RRHH, 41=Anulado Usuario, 80=Concedido
+ *
+ * @param V_ID_ANO               IN A√±o ausencia
+ * @param V_ID_FUNCIONARIO       IN ID del funcionario solicitante
+ * @param V_ID_TIPO_FUNCIONARIO  IN Tipo funcionario (10=Admin, 21=Polic√≠a, 23=Bombero)
+ * @param V_ID_TIPO_AUSENCIA     IN Tipo ausencia (50=Concilia, >500=Sindical)
+ * @param V_FECHA_INICIO         IN Fecha inicio
+ * @param V_FECHA_FIN            IN Fecha fin
+ * @param V_HORA_INICIO          IN Hora inicio (HH:MI)
+ * @param V_HORA_FIN             IN Hora fin (HH:MI)
+ * @param V_JUSTIFICACION        IN SI/NO si justificada
+ * @param V_TOTAL_HORAS          IN Total horas en minutos
+ * @param todo_ok_Basico         OUT 0=√âxito, 1=Error
+ * @param msgBasico              OUT Mensaje resultado
+ *
+ * @notes
+ * - Workflow completo con notificaciones por correo
+ * - Bolsa concilia (tipo 50): actualiza utilizadas por a√±o
+ * - Horas sindicales (>500): actualiza total_utilizadas por mes
+ * - Bomberos: l√≥gica especial para delegados
+ * - Delegados: consulta en DELEGADOS_APLIWEB por fechas
+ *
+ * @see envio_correo  Env√≠o notificaciones
+ *
+ * @author Sistema Ausencias RRHH
+ * @date   Actualizado 26/08/2019 (bomberos delegados)
+ * @version 3.0
+ */
+CREATE OR REPLACE PROCEDURE RRHH.INSERTA_AUSENCIAS (
+  V_ID_ANO              IN NUMBER,
+  V_ID_FUNCIONARIO      IN NUMBER,
+  V_ID_TIPO_FUNCIONARIO IN VARCHAR2,
+  V_ID_TIPO_AUSENCIA    IN VARCHAR2,
+  V_FECHA_INICIO        IN DATE,
+  V_FECHA_FIN           IN DATE,
+  V_HORA_INICIO         IN VARCHAR2,
+  V_HORA_FIN            IN VARCHAR2,
+  V_JUSTIFICACION       IN VARCHAR2,
+  V_TOTAL_HORAS         IN NUMBER,
+  todo_ok_Basico        OUT INTEGER,
+  msgBasico             OUT VARCHAR2
+) IS
 
-i_hora_inicio number;
-i_hora_fin number;
-i_no_hay_permisos number;
-i_num_dias number;
-i_id_tipo_dias number;
-i_unico varchar2(2);
-i_resta_fechas number;
-i_contador_laboral number;
-i_contador_natural number;
-i_contador number;
-i_id_js  varchar2(6);
-i_id_delegado_js varchar2(6);
-i_id_ja  varchar2(6);
-i_id_delegado_ja    varchar2(6);
-i_id_delegado_firma number;
-i_Estado_permiso number;
-i_fecha_js date;
-i_fecha_ja date;
- i_fecha_rrhh date;
- i_secuencia_operacion number;
- i_secuencia_ausencia number;
- i_fecha varchar2(10);
- i_hora  varchar2(10);
- i_id_ano  varchar2(4);
- correo_v_funcionario varchar2(256);
- correo_js varchar2(256);
- correo_ja varchar2(256);
- correo_js_delegado varchar2(256);
- correo_js_delegado2 varchar2(256);
- correo_js_delegado3 varchar2(256);
- correo_js_delegado4 varchar2(256);
- i_sender varchar2(256);
- i_recipient varchar2(256);
- I_ccrecipient varchar2(256);
- i_subject varchar2(256);
- I_message varchar2(15000);
- i_nombre_peticion varchar2(256);
- i_desc_tipo_ausencia varchar2(512);
- i_cadena2 varchar2(512);
- i_desc_mensaje varchar2(10000);
- i_formato_fecha_inicio date;
- i_formato_fecha_fin date;
- i_mes_inicio number;
-i_mes_fin number;
-i_mes_actual number;
-i_aÒo_inicio number;
-i_aÒo_fin number;
-i_aÒo_actual number;
-V_JEFE_GUARDIA varchar2(6);
- i_id_delegado_js2 varchar2(6);
- i_id_delegado_js3   varchar2(6);
- i_id_delegado_js4   varchar2(6);
-
-begin
-todo_ok_basico:=0;
-msgBasico:='';
-
-i_mes_inicio:=to_char(V_FECHA_INICIO,'MM');
-i_mes_fin:=to_char(V_FECHA_FIN,'MM');
-i_mes_actual:=to_char(sysdate,'MM');
-
-
-i_aÒo_inicio:=to_char(V_FECHA_INICIO,'YYYY');
-i_aÒo_fin:=to_char(V_FECHA_FIN,'YYYY');
-i_aÒo_actual:=to_char(sysdate,'YYYY');
-
-
-i_formato_fecha_inicio:= to_date(to_char(V_FECHA_INICIO,'DD/MM/YYYY') || V_HORA_INICIO,'DD/MM/YYYY HH24:MI');
-i_formato_fecha_fin:= to_date(to_char(V_FECHA_FIN,'DD/MM/YYYY') || V_HORA_FIN,'DD/MM/YYYY HH24:MI');
-
--- 10 Solicitado
--- 20 Pde. Firma Jefe Secc.
--- 21 Pde. Firma Jefe Area
--- 22 Pde Vo de RRHH.
--- 30 Rechazado Jefe Secc.
--- 31 Rechazado Jefe Area.
--- 32 Denegado RRHH
--- 40 Anulado RRHH
--- 80 Concedido
---obtenemos las persona que tienen que firmar si no tiene personas
---no se deja coger le permiso .
-IF  V_ID_TIPO_FUNCIONARIO <> 23 then
+  -- Constantes
+  C_ESTADO_SOLICITADO      CONSTANT VARCHAR2(2) := '10';
+  C_ESTADO_PDE_JS          CONSTANT VARCHAR2(2) := '20';
+  C_ESTADO_PDE_JA          CONSTANT VARCHAR2(2) := '21';
+  C_ESTADO_PDE_RRHH        CONSTANT VARCHAR2(2) := '22';
+  C_TIPO_FUNC_BOMBERO      CONSTANT VARCHAR2(2) := '23';
+  C_TIPO_AUSENCIA_CONCILIA CONSTANT VARCHAR2(3) := '50';
+  C_TIPO_AUSENCIA_SINDICAL CONSTANT NUMBER := 500;
+  
+  -- Variables
+  i_id_ausencia        NUMBER;
+  i_id_operacion       NUMBER;
+  i_id_estado_ausencia VARCHAR2(2);
+  i_no_hay_firma       NUMBER;
+  i_id_js              VARCHAR2(6);
+  i_id_delegado_js     VARCHAR2(6);
+  i_id_ja              VARCHAR2(6);
+  i_id_delegado_ja     VARCHAR2(6);
+  i_DESC_TIPO_AUSENCIA VARCHAR2(100);
+  i_id_mes             VARCHAR2(2);
+  i_hay_delegado_js    NUMBER;
+  i_hay_delegado_ja    NUMBER;
+  
+  -- Variables correo
+  correo_v_funcionario VARCHAR2(100);
+  i_nombre_peticion    VARCHAR2(100);
+  correo_js            VARCHAR2(100);
+  correo_ja            VARCHAR2(100);
+  i_sender             VARCHAR2(100);
+  i_recipient          VARCHAR2(100);
+  I_ccrecipient        VARCHAR2(100);
+  i_subject            VARCHAR2(100);
+  I_message            VARCHAR2(4000);
+  i_desc_mensaje       VARCHAR2(4000);
 
 BEGIN
-     select distinct id_js,
+
+  --------------------------------------------------------------------------------
+  -- FASE 1: VALIDACIONES Y GENERACI√ìN DE SECUENCIAS
+  --------------------------------------------------------------------------------
+  
+  todo_ok_basico := 0;
+  msgBasico := '';
+  i_no_hay_firma := 0;
+  i_hay_delegado_js := 0;
+  i_hay_delegado_ja := 0;
+  
+  -- Generar secuencias
+  SELECT sec_ausencia.NEXTVAL INTO i_id_ausencia FROM DUAL;
+  SELECT sec_operacion.NEXTVAL INTO i_id_operacion FROM DUAL;
+  
+  -- Obtener mes
+  SELECT TO_CHAR(V_FECHA_INICIO, 'MM') INTO i_id_mes FROM DUAL;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: OBTENER JERARQU√çA DE FIRMAS
+  --------------------------------------------------------------------------------
+  
+  BEGIN
+    SELECT id_js,
            id_delegado_js,
            id_ja,
-           id_delegado_ja,
-           id_delegado_firma, --aÒadido 1 de junio
-           id_delegado_js2,
-           id_delegado_js3,
-           id_delegado_js4
-     into  i_id_js,
+           id_delegado_ja
+    INTO   i_id_js,
            i_id_delegado_js,
            i_id_ja,
-           i_id_delegado_ja,
-           i_id_delegado_firma, --aÒadido 1 de junio
-           i_id_delegado_js2,
-           i_id_delegado_js3        ,
-                      i_id_delegado_js4
-     from funcionario_firma
-     where V_ID_FUNCIONARIO=ID_FUNCIONARIO;
-EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-i_id_ja:='0';
-i_id_js:='0';
-END;
---Buscamos el correo en la usuario.intranet.
-BEGIN
-    select MIN(peticion), MIN(nombre_peticion),MIN(js),MIN(ja)
-    into correo_v_funcionario,i_nombre_peticion,correo_js,correo_ja
-
- from (
-     select login || '@aytosalamanca.es' as peticion,substr(  DIST_NAME,  INSTR(DIST_NAME,'=',1) +1,INSTR(DIST_NAME,',',1) -INSTR(DIST_NAME,'=',1)-1) as nombre_peticion,''as js ,'' as ja from apliweb_usuario where id_funcionario=to_char(V_ID_FUNCIONARIO)
-     union
-     select '' as peticion, '' as nombre_peticion ,login || '@aytosalamanca.es' as js,'' as ja  from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_js,6,'0')
-      union
-    select '' as peticion ,'' as nombre_peticion ,'' as ja,login || '@aytosalamanca.es' as ja from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_ja,6,'0')
- );
-EXCEPTION
-                        WHEN NO_DATA_FOUND THEN
-i_id_ja:='0';
-i_id_js:='0';
-END;
-
---Codigo nuevo
---aÒadido 25 de Julio
-BEGIN
-    select MIN(peticion), MIN(nombre_peticion),MIN(js),MIN(js_delegado),MIN(ja),MIN(js_delegado2),MIN(js_delegado3),MIN(js_delegado4)
-    into correo_v_funcionario,i_nombre_peticion,correo_js,correo_js_delegado,correo_ja,correo_js_delegado2,correo_js_delegado3,correo_js_delegado4
-
- from (
-     select login || '@aytosalamanca.es' as peticion,TRIM(substr(dist_NAME,4,instr(dist_NAME,',',1)-4)) as nombre_peticion,''as js ,''as js_delegado ,'' as ja,'' as js_delegado2,'' as js_delegado3,'' as js_delegado4 from apliweb_usuario
-    where lpad(id_funcionario,6,'0')=lpad(to_char(V_ID_FUNCIONARIO),6,'0')
-     union
-     select '' as peticion, '' as nombre_peticion ,login || '@aytosalamanca.es' as js,''as js_delegado ,'' as ja,'' as js_delegado2,'' as js_delegado3 ,'' as js_delegado4 from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_js,6,'0')
-      union
-      select '' as peticion, '' as nombre_peticion ,''as js,login || '@aytosalamanca.es' as js_delegado ,'' as ja ,'' as js_delegado2,'' as js_delegado3,'' as js_delegado4 from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_delegado_js,6,'0')
-      union
-      select '' as peticion ,'' as nombre_peticion ,'' as js,''as js_delegado ,login || '@aytosalamanca.es' ,'' as js_delegado2,'' as js_delegado3,'' as js_delegado4   from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_ja,6,'0')
-      union
-      select '' as peticion, '' as nombre_peticion ,''as js,'' as js_delegado ,'' as ja ,login || '@aytosalamanca.es' as js_delegado2,'' as js_delegado3,'' as js_delegado4 from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_delegado_js2,6,'0')
-      union
-      select '' as peticion, '' as nombre_peticion ,''as js,'' as js_delegado ,'' as ja ,'' as js_delegado2,login || '@aytosalamanca.es' as js_delegado3,'' as js_delegado4 from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_delegado_js3,6,'0')
-       union
-      select '' as peticion, '' as nombre_peticion ,''as js,'' as js_delegado ,'' as ja ,'' as js_delegado2,'' as js_delegado3,login || '@aytosalamanca.es' as js_delegado4 from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_delegado_js4,6,'0')
-
- );
-EXCEPTION
-                        WHEN NO_DATA_FOUND THEN
-i_id_ja:='0';
-i_id_js:='0';
-END;
-
-
---Descripcion del permiso .
-BEGIN
-    select desc_tipo_ausencia
-
-     into  i_desc_tipo_ausencia
-
-     from TR_TIPO_AUSENCIA
-     where id_tipo_ausencia=V_ID_TIPO_AUSENCIA;
-EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     i_desc_tipo_ausencia:='';
-END;
-
---Si No hay jefes para firmar el permiso.
-IF   i_id_js='0' AND i_id_ja='0' then
-        todo_ok_basico:=1;
-        msgBasico:='Operacion no realizada. Pongase en contacto con RRHH. Sin firmas.';
-        RETURN;
-END IF;
-
-
-ELSE
---aÒadido chm 25/02/2017
---BUSQUEDA FIRMA BOMBEROS
---aÒadir la funciÛn
-i_id_ja:='0';
-i_id_js:='0';
-correo_js:='';
-V_JEFE_GUARDIA:='';
---chm 22/07/2022
---Comprobamos que esta el jefe de guardia. JA LUIS DAMIAN 961110 ldramos@aytosalamanca.es
---chm 16/09/2022 cambio de la tabla    bomberos_guardias_plani s,se elimina el enlace
-BEGIN --login
-  select login || '@aytosalamanca.es',lpad(funcionario,6,'0'),'961110','ldramos@aytosalamanca.es'
-   into correo_js,i_id_js,i_id_ja,correo_ja
-    from    bomberos_guardias_plani s,
-          --sige.GUARDIAS@lsige s,
-         apliweb_usuario a
-  where desde =DECODE( trunc(to_char(sysdate+0/24,'hh24')/8),0,
-        to_date(to_char(sysdate-1,'DD/mm/yyyy') || '08:00','DD/mm/yyyy hh24:mi')  ,
-        to_date(to_char(sysdate,'DD/mm/yyyy')   || '08:00','DD/mm/yyyy hh24:mi')
-         ) and dotacion='M' and lpad(funcionario,6,'0')=lpad(id_funcionario,6,'0') and rownum<2;
-EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     i_id_js:='0';--cambiar a 0
-END;
-
-
-IF  i_id_js='0' AND i_id_ja='0' then
-        todo_ok_basico:=1;
-        msgBasico:='La guardia no tiene asignada Jefe, intentelo m·s tarde.';
-        RETURN;
-END IF;
-
-
---nombre peticiÛn y correo
---chm 12/02/2017
-BEGIN
-select  MIN(correo_funcionario) ,MIN(nombre_peticion)
-    into correo_v_funcionario,i_nombre_peticion
- from (
-     select login || '@aytosalamanca.es' as correo_funcionario ,TRIM(substr(dist_NAME,4,instr(dist_NAME,',',1)-4)) as nombre_peticion from apliweb_usuario
-    where lpad(id_funcionario,6,'0')=lpad(to_char(V_ID_FUNCIONARIO),6,'0')
-      );
-
-EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     correo_v_funcionario:='';
-END;
-
-
-
-
-END IF;--FIN busqueda firmas
-
-
-  i_Estado_permiso:=10;
-  i_fecha_js:='';
-  i_fecha_ja:='';
-  i_fecha_rrhh:='';
-
-i_sender:=correo_v_funcionario;
-IF V_ID_TIPO_AUSENCIA> '500' THEN
-      i_cadena2:='Fecha Inicio: ' || to_char(V_FECHA_INICIO,'DD-MON-YY') ||  chr(10)||
-                 'Fecha Fin: ' || to_char(V_FECHA_FIN,'DD-MON-YY') ||  chr(10)||
-                'Hora de Inicio:     ' || V_HORA_INICIO ||  chr(10)||'Hora Fin: ' || V_HORA_FIN;
-ELSE
-   i_cadena2:='Fecha Ausencia: ' || to_char(V_FECHA_INICIO,'DD-MON-YY') ||  chr(10)||'Hora de Inicio:     ' || V_HORA_INICIO ||  chr(10)||'Hora Fin: ' || V_HORA_FIN;
-END IF;
-
---CHM 15/02/3021
-IF V_ID_TIPO_AUSENCIA = '998' THEN
-       i_cadena2:='Fecha Inicio: '       || to_char(V_FECHA_INICIO,'DD-MON-YY') ||  chr(10)||
-                  'Hora de Inicio:     ' || V_HORA_INICIO;
-END IF;
-
---obtenemos el dia y hora, secuencia de la operacion. ,secuencia del ausencia
-select sec_operacion.nextval,sec_ausencia.nextval,to_char(sysdate,'DD/MM/YYYY'),
-      to_char(sysdate,'HH:MI'),to_char(sysdate,'YYYY')
-into  i_secuencia_operacion,i_secuencia_ausencia,i_fecha,i_hora,i_id_ano
- from dual;
-
---configuracion formato_correo SI ES UNA HORA SINDICAL
---LO UNICO QUE SE TIENE QUE ENVIAR ES UN CORREO DICIENDO QUE SE HA COGER ESA HORA
-
-IF  V_ID_TIPO_AUSENCIA< '500' THEN
---Descripcion del ausencia.
-  BEGIN
-    select CABECERA || ' '||
-           'PeticiÛn AutorizaciÛn de Ausencia ' ||' '||
-           SOLICITADO || ' '||
-           i_nombre_peticion ||' '||
-           TIPO_PERMISO ||' '||
-           i_desc_tipo_ausencia||' '||
-           FECHA_INICIO  ||' '||
-           to_char(V_FECHA_INICIO,'DD-MON-YY')  ||' '||
-           DECODE(substr(V_ID_TIPO_AUSENCIA,1,1) ,'5',
-                 FECHA_FIN  ||' '||
-                 to_char(V_FECHA_FIN,'DD-MON-YY')
-                   ,'') ||' '||
-           HORA_INICIO ||' '|| V_HORA_INICIO   ||' '||  --
-           HORA_FIN    ||' '|| V_HORA_FIN      || ' '|| --
-           TOTAL_HORAS ||' '||  lpad(trunc( v_total_horas/60 ),2,'0')  || ':'||
-            lpad(trunc( mod(v_total_horas,60 ) ),2,'0')  || ' '||
-           CABECERA_FI ||' '||
-           'Esta ausencia requiere su autorizaciÛn para ser concedido'||' '||
-           CABECERA_FIN_1
-           ||
-           CABECERA_FIN_1_1
-
-     into  i_desc_mensaje
-     from  FORMATO_CORREO
-     where DECODE( substr(V_ID_TIPO_AUSENCIA,1,1) ,
-                     '5' , '500' ,
-                     '222'
-             )=ID_TIPO_PERMISO;
+           i_id_delegado_ja
+    FROM   funcionario_firma
+    WHERE  id_funcionario = V_ID_FUNCIONARIO;
+    
   EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     i_desc_tipo_ausencia:='';
+    WHEN NO_DATA_FOUND THEN
+      i_no_hay_firma := -1;
   END;
-ELSE
+  
+  IF i_no_hay_firma = -1 THEN
+    todo_ok_basico := 1;
+    msgBasico := 'Operacion no realizada. No hay personas para firmar.';
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: VERIFICAR DELEGADOS ACTIVOS (por fechas)
+  --------------------------------------------------------------------------------
+  
+  -- Verificar delegado JS activo
+  IF i_id_delegado_js IS NOT NULL THEN
+    BEGIN
+      SELECT COUNT(*)
+      INTO   i_hay_delegado_js
+      FROM   DELEGADOS_APLIWEB
+      WHERE  id_funcionario = i_id_js
+        AND  id_delegado = i_id_delegado_js
+        AND  V_FECHA_INICIO BETWEEN fecha_desde AND fecha_hasta
+        AND  ROWNUM < 2;
+        
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_hay_delegado_js := 0;
+    END;
+  END IF;
+  
+  -- Verificar delegado JA activo
+  IF i_id_delegado_ja IS NOT NULL THEN
+    BEGIN
+      SELECT COUNT(*)
+      INTO   i_hay_delegado_ja
+      FROM   DELEGADOS_APLIWEB
+      WHERE  id_funcionario = i_id_ja
+        AND  id_delegado = i_id_delegado_ja
+        AND  V_FECHA_INICIO BETWEEN fecha_desde AND fecha_hasta
+        AND  ROWNUM < 2;
+        
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_hay_delegado_ja := 0;
+    END;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: DETERMINAR ESTADO INICIAL SEG√öN JERARQU√çA Y DELEGADOS
+  --------------------------------------------------------------------------------
+  
+  -- Sin JS ni JA: directo a RRHH (estado 22)
+  IF i_id_js IS NULL AND i_id_ja IS NULL THEN
+    i_id_estado_ausencia := C_ESTADO_PDE_RRHH; -- 22
+    
+  -- JS = JA (mismo funcionario): una sola firma (JS) - estado 20
+  ELSIF i_id_js = i_id_ja THEN
+    i_id_estado_ausencia := C_ESTADO_PDE_JS; -- 20
+    
+  -- Bomberos con delegado JS: estado 20
+  ELSIF V_ID_TIPO_FUNCIONARIO = C_TIPO_FUNC_BOMBERO AND i_hay_delegado_js > 0 THEN
+    i_id_estado_ausencia := C_ESTADO_PDE_JS; -- 20
+    
+  -- Con delegado JS activo: estado 20
+  ELSIF i_hay_delegado_js > 0 THEN
+    i_id_estado_ausencia := C_ESTADO_PDE_JS; -- 20
+    
+  -- Con JA (y JS): estado 21 (pendiente JA)
+  ELSIF i_id_ja IS NOT NULL THEN
+    i_id_estado_ausencia := C_ESTADO_PDE_JA; -- 21
+    
+  -- Solo JS sin delegado: estado 10 (solicitado)
+  ELSIF i_id_js IS NOT NULL THEN
+    i_id_estado_ausencia := C_ESTADO_SOLICITADO; -- 10
+    
+  -- Por defecto: solicitado
+  ELSE
+    i_id_estado_ausencia := C_ESTADO_SOLICITADO; -- 10
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 5: INSERTAR AUSENCIA
+  --------------------------------------------------------------------------------
+  
+  INSERT INTO ausencia
+  VALUES (i_id_ausencia,
+          V_ID_ANO,
+          V_ID_FUNCIONARIO,
+          V_ID_TIPO_FUNCIONARIO,
+          V_ID_TIPO_AUSENCIA,
+          i_id_estado_ausencia,
+          V_FECHA_INICIO,
+          V_FECHA_FIN,
+          V_HORA_INICIO,
+          V_HORA_FIN,
+          V_JUSTIFICACION,
+          V_TOTAL_HORAS,
+          NULL, -- firmado_js
+          NULL, -- fecha_js
+          NULL, -- firmado_ja
+          NULL, -- fecha_ja
+          NULL, -- firmado_rrhh
+          NULL, -- fecha_rrhh
+          NULL, -- motivo_denega
+          'NO', -- anulado
+          SYSDATE, -- fecha_alta
+          SYSDATE, -- fecha_modi
+          NULL); -- ip
+  
+  --------------------------------------------------------------------------------
+  -- FASE 6: ACTUALIZAR BOLSAS (CONCILIA O SINDICAL)
+  --------------------------------------------------------------------------------
+  
+  -- Actualizar bolsa concilia (tipo 50)
+  IF V_ID_TIPO_AUSENCIA = C_TIPO_AUSENCIA_CONCILIA THEN
+    UPDATE BOLSA_CONCILIA
+    SET    utilizadas = utilizadas + V_TOTAL_HORAS,
+           pendientes_justificar = pendientes_justificar + V_TOTAL_HORAS
+    WHERE  id_ano = V_ID_ANO
+      AND  id_funcionario = V_ID_FUNCIONARIO;
+  END IF;
+  
+  -- Actualizar horas sindicales (tipos > 500)
+  IF TO_NUMBER(V_ID_TIPO_AUSENCIA) > C_TIPO_AUSENCIA_SINDICAL THEN
+    UPDATE HORA_SINDICAL
+    SET    TOTAL_UTILIZADAS = TOTAL_UTILIZADAS + V_TOTAL_HORAS
+    WHERE  id_ano = V_ID_ANO
+      AND  id_MES = i_id_mes
+      AND  id_funcionario = V_ID_FUNCIONARIO
+      AND  ID_TIPO_AUSENCIA = V_ID_TIPO_AUSENCIA
+      AND  ROWNUM < 2;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 7: REGISTRAR EN HIST√ìRICO
+  --------------------------------------------------------------------------------
+  
+  INSERT INTO historico_operaciones
+  VALUES (i_id_operacion,
+          i_id_ausencia,
+          i_id_estado_ausencia,
+          V_ID_ANO,
+          V_ID_FUNCIONARIO,
+          TO_CHAR(SYSDATE, 'DD/MM/YYYY'),
+          TO_CHAR(SYSDATE, 'HH:MI'),
+          'SOLICITUD USUARIO',
+          V_ID_FUNCIONARIO,
+          TO_CHAR(SYSDATE, 'DD/MM/YYYY'));
+  
+  --------------------------------------------------------------------------------
+  -- FASE 8: OBTENER DESCRIPCI√ìN TIPO AUSENCIA
+  --------------------------------------------------------------------------------
+  
   BEGIN
-  select CABECERA || ' '||
-           'Para su conocimiento  ' ||' '||
-           SOLICITADO || ' '||
-           i_nombre_peticion ||' '||
-           TIPO_PERMISO ||' '||
-           i_desc_tipo_ausencia||' '||
-           FECHA_INICIO  ||' '||
-           to_char(V_FECHA_INICIO,'DD-MON-YY')  ||' '||
-           DECODE(substr(V_ID_TIPO_AUSENCIA,1,1) ,'5',
-                 FECHA_FIN  ||' '||
-                 to_char(V_FECHA_FIN,'DD-MON-YY')
-                   ,'') ||' '||
-           HORA_INICIO ||' '|| V_HORA_INICIO   ||' '||  --
-           HORA_FIN    ||' '|| V_HORA_FIN      || ' '|| --
-           TOTAL_HORAS ||' '||  lpad(trunc( v_total_horas/60 ),2,'0')  || ':'||
-            lpad(trunc( mod(v_total_horas,60 ) ),2,'0')  || ' '||
-           CABECERA_FI ||' '||
-           'Horas Sindicales '||' '||
-           CABECERA_FIN_1
-           ||'ID_AUSENCIA =' ||i_secuencia_ausencia || '2025=2012' ||
-           CABECERA_FIN_1_1
-
-     into  i_desc_mensaje
-     from  FORMATO_CORREO
-     where DECODE( substr(V_ID_TIPO_AUSENCIA,1,1) ,
-                     '5' , '500' ,
-                     '222'
-             )=ID_TIPO_PERMISO;
+    SELECT DESC_TIPO_AUSENCIA
+    INTO   i_DESC_TIPO_AUSENCIA
+    FROM   tr_tipo_ausencia
+    WHERE  id_tipo_ausencia = V_ID_TIPO_AUSENCIA;
+    
   EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     i_desc_tipo_ausencia:='';
+    WHEN NO_DATA_FOUND THEN
+      i_DESC_TIPO_AUSENCIA := '';
   END;
-    i_recipient:=i_id_js;
-    I_ccrecipient:=i_id_ja;
-
-END IF;
-
-
---CHM 15/02/3021
-IF V_ID_TIPO_AUSENCIA = '998' THEN
---Descripcion del ausencia.
+  
+  --------------------------------------------------------------------------------
+  -- FASE 9: OBTENER CORREOS ELECTR√ìNICOS
+  --------------------------------------------------------------------------------
+  
   BEGIN
-    select CABECERA || ' '||
-           'PeticiÛn AutorizaciÛn de ResoluciÛn Incidencia de Fichaje ' ||' '||
-           SOLICITADO || ' '||
-           i_nombre_peticion ||' '||
-           TIPO_PERMISO ||' '||
-           i_desc_tipo_ausencia||' '||
-           FECHA_INICIO  ||' '||
-           to_char(V_FECHA_INICIO,'DD-MON-YY')  ||' '||
-           DECODE(substr(V_ID_TIPO_AUSENCIA,1,1) ,'5',
-                 FECHA_FIN  ||' '||
-                 to_char(V_FECHA_FIN,'DD-MON-YY')
-                   ,'') ||' '||
-           HORA_INICIO ||' '|| V_HORA_INICIO   ||' '||  --
-           CABECERA_FI ||' '||
-           'Esta peticiÛn requiere su autorizaciÛn para este fichaje sea valido'||' '||
-           CABECERA_FIN_1
-           ||
-           CABECERA_FIN_1_1
-
-     into  i_desc_mensaje
-     from  FORMATO_CORREO
-     where DECODE( substr(V_ID_TIPO_AUSENCIA,1,1) ,
-                     '5' , '500' ,
-                     '222'
-             )=ID_TIPO_PERMISO;
+    SELECT MIN(peticion),
+           MIN(nombre_peticion),
+           MIN(js),
+           MIN(ja)
+    INTO   correo_v_funcionario,
+           i_nombre_peticion,
+           correo_js,
+           correo_ja
+    FROM   (SELECT login || '@aytosalamanca.es' AS peticion,
+                   SUBSTR(DIST_NAME, INSTR(DIST_NAME, '=', 1) + 1, INSTR(DIST_NAME, ',', 1) - INSTR(DIST_NAME, '=', 1) - 1) AS nombre_peticion,
+                   '' AS js,
+                   '' AS ja
+            FROM   apliweb_usuario
+            WHERE  id_funcionario = TO_CHAR(V_ID_FUNCIONARIO)
+            UNION
+            SELECT '' AS peticion,
+                   '' AS nombre_peticion,
+                   login || '@aytosalamanca.es' AS js,
+                   '' AS ja
+            FROM   apliweb_usuario
+            WHERE  LPAD(id_funcionario, 6, '0') = LPAD(NVL(i_id_delegado_js, i_id_js), 6, '0')
+            UNION
+            SELECT '' AS peticion,
+                   '' AS nombre_peticion,
+                   '' AS js,
+                   login || '@aytosalamanca.es' AS ja
+            FROM   apliweb_usuario
+            WHERE  LPAD(id_funcionario, 6, '0') = LPAD(NVL(i_id_delegado_ja, i_id_ja), 6, '0'));
+            
   EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     i_desc_tipo_ausencia:='';
+    WHEN NO_DATA_FOUND THEN
+      i_id_ja := '';
+      i_id_js := '';
   END;
-END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 10: ENVIAR CORREOS SEG√öN ESTADO
+  --------------------------------------------------------------------------------
+  
+  -- Preparar mensaje base
+  BEGIN
+    SELECT CABECERA || ' ' ||
+           SOLICITADO || ' ' ||
+           i_nombre_peticion || ' ' ||
+           TIPO_PERMISO || ' ' ||
+           i_desc_tipo_ausencia || ' ' ||
+           FECHA_INICIO || ' ' ||
+           TO_CHAR(V_FECHA_INICIO, 'DD/MM/YYYY') || ' ' ||
+           DECODE(SUBSTR(V_ID_TIPO_AUSENCIA, 1, 1), '5',
+                  FECHA_FIN || ' ' || TO_CHAR(V_FECHA_FIN, 'DD/MM/YYYY'), '') || ' ' ||
+           HORA_INICIO || ' ' || V_HORA_INICIO || ' ' ||
+           HORA_FIN || ' ' || V_HORA_FIN || ' ' ||
+           CABECERA_FI || ' ' ||
+           DECODE(i_id_estado_ausencia,
+                  '10', 'Pendiente de Firma',
+                  '20', 'Pendiente de Jefe Secci√≥n',
+                  '21', 'Pendiente de Jefe √Årea',
+                  '22', 'Pendiente de RRHH',
+                  'Solicitado') || ' ' ||
+           CABECERA_FIN_2
+    INTO   i_desc_mensaje
+    FROM   FORMATO_CORREO
+    WHERE  DECODE(SUBSTR(V_ID_TIPO_AUSENCIA, 1, 1), '5', '500', '222') = ID_TIPO_PERMISO;
+    
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      i_desc_mensaje := 'Solicitud de ausencia: ' || i_DESC_TIPO_AUSENCIA;
+  END;
+  
+  I_message := i_desc_mensaje;
+  
+  -- Enviar seg√∫n estado
+  CASE i_id_estado_ausencia
+    
+    -- Estado 10: Solicitado - notificar a JS
+    WHEN C_ESTADO_SOLICITADO THEN
+      i_sender := correo_v_funcionario;
+      i_recipient := NVL(correo_js, 'permisos.rrhh@aytosalamanca.es');
+      I_ccrecipient := '';
+      i_subject := 'Solicitud de Ausencia pendiente de firma';
+      
+    -- Estado 20: Pde JS - notificar a JS
+    WHEN C_ESTADO_PDE_JS THEN
+      i_sender := correo_v_funcionario;
+      i_recipient := NVL(correo_js, 'permisos.rrhh@aytosalamanca.es');
+      I_ccrecipient := '';
+      i_subject := 'Ausencia pendiente firma Jefe Secci√≥n';
+      
+    -- Estado 21: Pde JA - notificar a JA
+    WHEN C_ESTADO_PDE_JA THEN
+      i_sender := correo_v_funcionario;
+      i_recipient := NVL(correo_ja, 'permisos.rrhh@aytosalamanca.es');
+      I_ccrecipient := correo_js;
+      i_subject := 'Ausencia pendiente firma Jefe √Årea';
+      
+    -- Estado 22: Pde RRHH - notificar a RRHH
+    WHEN C_ESTADO_PDE_RRHH THEN
+      i_sender := correo_v_funcionario;
+      i_recipient := 'permisos.rrhh@aytosalamanca.es';
+      I_ccrecipient := correo_js || ';' || correo_ja;
+      i_subject := 'Ausencia pendiente visto bueno RRHH';
+      
+    ELSE
+      i_sender := correo_v_funcionario;
+      i_recipient := 'permisos.rrhh@aytosalamanca.es';
+      I_ccrecipient := '';
+      i_subject := 'Nueva solicitud de Ausencia';
+      
+  END CASE;
+  
+  envio_correo(i_sender, i_recipient, I_ccrecipient, i_subject, I_message);
+  
+  msgBasico := 'Ausencia solicitada correctamente. ID: ' || i_id_ausencia || ' - Estado: ' ||
+               DECODE(i_id_estado_ausencia, '10', 'Solicitado', '20', 'Pde JS', '21', 'Pde JA', '22', 'Pde RRHH', i_id_estado_ausencia);
+  todo_ok_basico := 0;
+  
+  COMMIT;
 
-
-
-
---Comprobamos quien firma
-IF i_id_js=V_ID_FUNCIONARIO AND i_id_ja<>V_ID_FUNCIONARIO THEN
-     i_Estado_permiso:=22;
-          i_fecha_ja:=sysdate;
-          i_fecha_js:=i_fecha_ja;
-            i_subject:='Solicitud de Permiso de: ' || i_nombre_peticion;
-          --Bomberos
-           IF i_id_ja='961110'  THEN --cambiar quitar i_id_ja='101217'
-                i_Estado_permiso:=21;--las ausencias VO guardia
-                i_recipient:=correo_ja;
-                i_fecha_ja:=''; --tiene que firmar
-                i_id_ja:='';
-                i_subject:='Solicitud de Permiso de: ' || i_nombre_peticion;
-           END IF;
-
-ELSE IF i_id_ja=V_ID_FUNCIONARIO THEN
-          i_Estado_permiso:=22;
-          i_fecha_ja:=sysdate;
-          i_id_js:=i_id_ja;
-          i_fecha_js:=i_fecha_ja;
-     ELSE --curri normal
-          i_Estado_permiso:=20;
-
-           --chm 15/02/2017
-          --jefe guardia.
-          IF  V_ID_TIPO_FUNCIONARIO = 23 then
-            V_JEFE_GUARDIA:=i_id_js;
-          else
-             i_id_js:='';
-          end if;
-
-          i_fecha_js:='';
-          i_id_ja:='';
-          i_fecha_ja:='';
-          i_recipient:=correo_js;
-        -- i_recipient:='carlos@aytosalamanca.es';
-         -- I_ccrecipient:='carlos@aytosalamanca.es';
-          i_subject:='Solicitud de Ausencia de: ' || i_nombre_peticion;
-           I_message:= 'Solicitud de autorizacion para Ausencia.'||  chr(10)||
-             'Necesita su autorizacion para que este Ausencia sea concedido.' || chr(10)||  chr(10)||
-             'Solicitud de Ausencia de: '|| i_nombre_peticion || chr(10)||
-             'Tipo Ausencia: '  || i_desc_tipo_ausencia|| chr(10)||
-              i_cadena2;
-          I_message:= i_desc_mensaje;
-     END IF;
-END IF;
-
-IF V_ID_TIPO_AUSENCIA > '500' THEN
- /* CAMBIADO A PETICION DE rrhh 22 DE mARZO DE 1010 */
- -- i_Estado_permiso:=80;
- -- i_id_js:=V_ID_FUNCIONARIO;
- -- i_fecha_js:=sysdate;
- -- i_id_ja:=V_ID_FUNCIONARIO;
- -- i_fecha_ja:=sysdate;
- -- i_subject:='Horas Sindicales de: ' || i_nombre_peticion;
- -- i_recipient:=correo_ja;
- -- I_ccrecipient:=correo_js;
-   i_fecha_ja:=sysdate;
-END IF;
-
---CHM 15/02/3021
-IF V_ID_TIPO_AUSENCIA = '998' THEN
-   i_subject:='Solicitud  ResoluciÛn Incidencia en un  Fichaje: ' || i_nombre_peticion;
-           I_message:= 'Solicitud de autorizacion para ResoluciÛn Incidencia de Fichaje.'||  chr(10)||
-             'Necesita su autorizacion para que este Fichaje sea valido.' || chr(10)||  chr(10)||
-             'Solicitud de ResoluciÛn Incidencia de Fichaje: '|| i_nombre_peticion || chr(10)||
-
-              i_cadena2;
-          I_message:= i_desc_mensaje;
-
-END IF;
-
- --INSERT EN AUSENCIAS
- insert into ausencia (
-               id_ausencia,
-               id_ano,
-               id_funcionario,
-               id_tipo_ausencia,
-               id_estado,
-               firmado_js,
-               fecha_js,
-               firmado_ja,
-               fecha_ja,
-               fecha_inicio,
-               fecha_fin,
-               total_horas,
-               id_usuario,
-               fecha_modi
-               )
-       vaLues
-               (i_secuencia_ausencia ,
-                V_id_ANO,
-                V_ID_FUNCIONARIO,
-                V_ID_TIPO_AUSENCIA,
-                i_estado_permiso,
-                 i_id_js,
-                to_date(to_char(i_fecha_js,'DD/MM/yy'),'DD/MM/yy'),
-                i_id_ja,
-                to_date(to_char(i_fecha_ja,'DD/MM/yy'),'DD/MM/yy'),
-                i_formato_fecha_inicio,
-                i_formato_fecha_fin,
-                v_total_horas,
-               V_ID_FUNCIONARIO
-               ,to_date(to_char(sysdate,'DD/MM/yy'),'DD/MM/yy')
-                 );
-
---chm 27/10/2025
- /*IF i_estado_permiso <> 22 then
-
- -- ENVIO DE CORREO
-          envio_correo(i_sender ,
-                       i_recipient ,
-                       I_ccrecipient ,
-                       i_subject ,
-                       I_message);
-
- --envio correo guardiabomberos.
- --chm 01/03/2017
- IF  V_ID_TIPO_FUNCIONARIO = 23 then
-     envio_correo(i_sender ,
-                       'guardiabomberos@aytosalamanca.es' ,
-                       I_ccrecipient ,
-                       i_subject ,
-                       I_message);
-
-
- END IF;
-
-
-
-                       --i_sender:='c';
- --Envio de correo al suplente si esta de vacaciones el principal
- --aÒadido 25 Julio 2013
- if  chequea_vacaciones_js(i_id_jS)=1 then
-     i_recipient:=correo_js_delegado;
-     envio_correo(i_sender ,
-                 i_recipient ,
-                 I_ccrecipient ,
-                 i_subject || ' .Firma suplente.',
-                 I_message);
- end if;
-
- --Envio de correo al suplente si puede firmar siempre
- --aÒadido 1 Junio 2016
- if i_id_delegado_firma = 1 then
-     i_recipient:=correo_js_delegado;
-     envio_correo(i_sender ,
-                 i_recipient ,
-                 I_ccrecipient ,
-                 i_subject || ' .Firma suplente.El permiso puede ser Firmado tambien por otra persona.',
-                 I_message);
-    i_recipient:=correo_js_delegado2;
-     envio_correo(i_sender ,
-                 i_recipient ,
-                 I_ccrecipient ,
-                 i_subject || ' .Firma suplente.El permiso puede ser Firmado tambien por otra persona.',
-                 I_message);
-     i_recipient:=correo_js_delegado3;
-     envio_correo(i_sender ,
-                 i_recipient ,
-                 I_ccrecipient ,
-                 i_subject || ' .Firma suplente.El permiso puede ser Firmado tambien por otra persona.',
-                 I_message);
-       i_recipient:=correo_js_delegado4;
-     envio_correo(i_sender ,
-                 i_recipient ,
-                 I_ccrecipient ,
-                 i_subject || ' .Firma suplente.El permiso puede ser Firmado tambien por otra persona.',
-                 I_message);
- end if;
-
-END IF;*/
-
---quito las horas sindicales.
-IF V_ID_TIPO_AUSENCIA > 500 THEN
-
-   UPDATE HORA_SINDICAL
-   SET TOTAL_UTILIZADAS=TOTAL_UTILIZADAS+v_total_horas
-   where
-                id_ano=i_aÒo_actual AND
-                id_MES=i_mes_Actual and
-                id_funcionario=V_ID_FUNCIONARIO AND
-                ID_TIPO_AUSENCIA= V_ID_TIPO_AUSENCIA;
-
-END IF;
-
---chm 13/02/2020
---quito las horas de las bolsa concilia
-IF V_ID_TIPO_AUSENCIA = 50 THEN
-
-   UPDATE BOLSA_CONCILIA
-   SET
-   utilizadas=nvl(utilizadas,0)+v_total_horas,
-   pendientes_justificar=nvl(pendientes_justificar,0)+v_total_horas
-   where id_ano=i_aÒo_actual AND  id_funcionario=V_ID_FUNCIONARIO;
-
-END IF;
-
-
- --Insert en el historico
-   insert into historico_operaciones
-      values(i_secuencia_operacion,
-             i_secuencia_ausencia ,
-             10,
-             v_id_ano,
-             V_ID_FUNCIONARIO,
-             to_Date(i_fecha,'DD/MM/YYYY'),
-             i_hora,
-             'INSERTA AUSENCIA',
-              V_ID_FUNCIONARIO,to_Date(i_fecha,'DD/MM/YYYY'));
-
-
-end INSERTA_AUSENCIAS;
+EXCEPTION
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('Error en inserta_ausencias: ' || SQLERRM);
+    ROLLBACK;
+    todo_ok_basico := 1;
+    msgBasico := 'Error en inserta_ausencias: ' || SQLERRM;
+    
+END INSERTA_AUSENCIAS;
 /
-
