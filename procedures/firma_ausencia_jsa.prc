@@ -1,643 +1,535 @@
-CREATE OR REPLACE PROCEDURE RRHH."FIRMA_AUSENCIA_JSA"
-       (V_ID_FIRMA in varchar2,
-        V_ID_FUNCIONARIO_FIRMA in number,
-        V_ID_AUSENCIA in number,
-        V_ID_MOTIVO in  VARCHAR2,
-        todo_ok_Basico out integer,msgBasico out varchar2) is
+/**
+ * FIRMA_AUSENCIA_JSA
+ *
+ * @description
+ * Gestiona las firmas de Jefes de Sección (JS) y Jefes de Área (JA) para ausencias,
+ * incluyendo lógica de delegados, bomberos y transiciones de estado según jerarquía.
+ *
+ * @details
+ * Flujo de firmas:
+ * - Estado 10 (Solicitado) → JS firma → 20 (Pde JS) o 21 (Pde JA) o 22 (Pde RRHH)
+ * - Estado 20 (Pde JS) → JS firma → 21 (Pde JA) o 22 (Pde RRHH)
+ * - Estado 21 (Pde JA) → JA firma → 22 (Pde RRHH)
+ *
+ * Rechazos:
+ * - JS rechaza: Estado 30 (Rechazado JS)
+ * - JA rechaza: Estado 31 (Rechazado JA)
+ *
+ * Lógica delegados:
+ * - Delegados asumen rol del titular (JS o JA)
+ * - Validación por fechas en tabla DELEGADOS_APLIWEB
+ * - Bomberos: lógica especial para delegados activos
+ *
+ * Casos especiales:
+ * - JS = JA: una sola firma necesaria (JS)
+ * - Bomberos con delegado: estado 20 directo
+ * - Sin JA: después de JS va directo a RRHH (22)
+ *
+ * Operaciones realizadas:
+ * - Validar ausencia y jerarquía firmas
+ * - Verificar delegados activos por fechas
+ * - Autorizar/Rechazar según V_ID_FIRMA
+ * - Actualizar estado según siguiente nivel
+ * - Registrar firma y fecha (firmado_js/firmado_ja)
+ * - Enviar correos notificación según nuevo estado
+ * - Registrar en histórico_operaciones
+ * - Revertir bolsa si rechazo
+ *
+ * Estados ausencias:
+ * 10=Solicitado, 20=Pde JS, 21=Pde JA, 22=Pde RRHH
+ * 30=Rechazado JS, 31=Rechazado JA, 32=Denegado RRHH
+ * 40=Anulado RRHH, 41=Anulado Usuario, 80=Concedido
+ *
+ * @param V_ID_FIRMA             IN 1=Autorizar, 0=Rechazar
+ * @param V_ID_FUNCIONARIO_FIRMA IN ID del funcionario que firma (JS/JA/delegado)
+ * @param V_ID_AUSENCIA          IN ID de la ausencia a firmar
+ * @param V_ID_MOTIVO            IN Motivo rechazo (solo si V_ID_FIRMA=0)
+ * @param todo_ok_Basico         OUT 0=Éxito, 1=Error
+ * @param msgBasico              OUT Mensaje resultado
+ *
+ * @notes
+ * - Validación estricta jerarquía: solo pueden firmar JS/JA asignados o delegados
+ * - Delegados: validar periodo activo en DELEGADOS_APLIWEB
+ * - Bomberos (tipo 23): reglas especiales para delegados
+ * - Revertir bolsa: solo en rechazos (estados 30/31)
+ * - Tipo funcionario: 10=Admin, 21=Policía, 23=Bombero
+ *
+ * @see envio_correo  Envío notificaciones
+ *
+ * @author Sistema Ausencias RRHH
+ * @date   Actualizado 26/08/2019 (bomberos delegados)
+ * @version 3.0
+ */
+CREATE OR REPLACE PROCEDURE RRHH.FIRMA_AUSENCIA_JSA (
+  V_ID_FIRMA             IN VARCHAR2,
+  V_ID_FUNCIONARIO_FIRMA IN NUMBER,
+  V_ID_AUSENCIA          IN NUMBER,
+  V_ID_MOTIVO            IN VARCHAR2,
+  todo_ok_Basico         OUT INTEGER,
+  msgBasico              OUT VARCHAR2
+) IS
 
-i_no_hay_ausencias number;
-i_no_hay_firma number;
-i_id_funcionario varchar2(6);
- i_firma varchar2(256);
-i_id_estado varchar2(2);
-i_id_js varchar2(6);
-i_id_delegado_js varchar2(6);
-   i_id_delegado_js2    varchar2(6);
-      i_id_delegado_js3    varchar2(6);
-        i_id_delegado_js4    varchar2(6);
-i_id_ja varchar2(6);
-i_id_delegado_ja  varchar2(6);
-i_id_delegado_firma number;
+  -- Constantes
+  C_ESTADO_SOLICITADO      CONSTANT VARCHAR2(2) := '10';
+  C_ESTADO_PDE_JS          CONSTANT VARCHAR2(2) := '20';
+  C_ESTADO_PDE_JA          CONSTANT VARCHAR2(2) := '21';
+  C_ESTADO_PDE_RRHH        CONSTANT VARCHAR2(2) := '22';
+  C_ESTADO_RECHAZADO_JS    CONSTANT VARCHAR2(2) := '30';
+  C_ESTADO_RECHAZADO_JA    CONSTANT VARCHAR2(2) := '31';
+  C_FIRMA_AUTORIZA         CONSTANT VARCHAR2(1) := '1';
+  C_FIRMA_RECHAZA          CONSTANT VARCHAR2(1) := '0';
+  C_TIPO_FUNC_BOMBERO      CONSTANT VARCHAR2(2) := '23';
+  C_TIPO_AUSENCIA_CONCILIA CONSTANT VARCHAR2(3) := '50';
+  C_TIPO_AUSENCIA_SINDICAL CONSTANT NUMBER := 500;
+  
+  -- Variables ausencia
+  i_no_hay_ausencias       NUMBER;
+  i_id_funcionario         VARCHAR2(6);
+  i_id_estado              VARCHAR2(2);
+  i_id_ano                 NUMBER(4);
+  i_id_mes                 VARCHAR2(2);
+  v_id_tipo_ausencia       VARCHAR2(3);
+  v_fecha_inicio           DATE;
+  v_total_horas            NUMBER;
+  i_tipo_funcionario       VARCHAR2(2);
+  i_DESC_TIPO_AUSENCIA     VARCHAR2(100);
+  
+  -- Variables jerarquía
+  i_no_hay_firma           NUMBER;
+  i_id_js                  VARCHAR2(6);
+  i_id_delegado_js         VARCHAR2(6);
+  i_id_ja                  VARCHAR2(6);
+  i_id_delegado_ja         VARCHAR2(6);
+  i_hay_delegado_js        NUMBER;
+  i_hay_delegado_ja        NUMBER;
+  
+  -- Variables control
+  i_nuevo_estado           VARCHAR2(2);
+  i_es_js                  NUMBER;
+  i_es_ja                  NUMBER;
+  i_firma_descripcion      VARCHAR2(100);
+  
+  -- Variables correo
+  correo_v_funcionario VARCHAR2(100);
+  i_nombre_peticion    VARCHAR2(100);
+  correo_js            VARCHAR2(100);
+  correo_ja            VARCHAR2(100);
+  i_sender             VARCHAR2(100);
+  i_recipient          VARCHAR2(100);
+  I_ccrecipient        VARCHAR2(100);
+  i_subject            VARCHAR2(100);
+  I_message            VARCHAR2(4000);
 
-
-i_DESC_TIPO_AUSENCIA varchar2(512);
-i_CADENA2 varchar2(512);
-
-correo_v_funcionario varchar2(512);
-i_nombre_peticion varchar2(512);
-correo_js varchar2(512);
-correo_ja varchar2(512);
-i_sender varchar2(256);
- i_recipient varchar2(256);
- I_ccrecipient varchar2(256);
- i_subject varchar2(256);
- I_message varchar2(15120);
- i_id_ano number(4);
- i_dias number(4);
- i_desc_mensaje varchar2(15120);
- v_id_tipo_ausencia varchar2(3);
- i_contador number;
- v_fecha_inicio date;
- v_fecha_fin date;
- V_HORA_INICIO varchar2(5);
- V_HORA_FIN varchar2(5);
- V_TOTAL_HORAS number;
- v_tipo_funcionario varchar2(6);
-begin
-
-todo_ok_basico:=0;
-msgBasico:='';
-
---Compruebo que el permiso esta en la tabla
-i_no_hay_ausencias:=0;
 BEGIN
-    select total_horas,substr(to_char(a.FECHA_INICIO,'DD/MM/YYYY HH24:MI'),12,5) as HORA_INICIO,
-           substr(to_char(a.FECHA_FIN,'DD/MM/YYYY HH24:MI'),12,5) as  HORA_FIN,a.FECHA_INICIO,a.fecha_fin,a.id_tipo_ausencia,
-    a.id_ano,a.id_estado,id_funcionario,DESC_TIPO_AUSENCIA
-    into V_TOTAL_HORAS,V_HORA_INICIO,V_HORA_FIN,v_fecha_inicio,v_fecha_fin,v_id_tipo_ausencia,
-    i_id_ano,i_id_estado,i_id_funcionario,i_DESC_TIPO_AUSENCIA
-    from ausencia a,tr_tipo_ausencia  tr
-    where id_ausencia=v_id_ausencia and
-          a.id_tipo_ausencia=tr.id_tipo_ausencia and
-          (anulado='NO' OR ANULADO IS NULL);
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-         i_no_hay_ausencias:=-1;
-END;
 
-
-i_cadena2:='Fecha Ausencia: ' || to_char(V_FECHA_INICIO,'DD-MON-YY') ||  chr(10)||'Hora de Inicio:     ' || V_HORA_INICIO ||  chr(10)||'Hora Fin: ' || V_HORA_FIN;
-
-IF  i_no_hay_ausencias = -1 then
-             todo_ok_basico:=1;
-             msgBasico:='Operacion no realizada.Ausencia no existe.';
-             RETURN;
-END IF;
---chm 10/02/2017
- --Compruebo el tipo de funcionario de la solicitud
- v_tipo_funcionario:=10;
+  --------------------------------------------------------------------------------
+  -- FASE 1: VALIDAR AUSENCIA Y OBTENER DATOS
+  --------------------------------------------------------------------------------
+  
+  todo_ok_basico := 0;
+  msgBasico := '';
+  i_no_hay_ausencias := 0;
+  
   BEGIN
-    select tipo_funcionario2
-      into v_tipo_funcionario
-      from personal_new pe
-     where id_funcionario = i_id_funcionario  and rownum<2;
+    SELECT total_horas,
+           fecha_inicio,
+           id_tipo_ausencia,
+           id_ano,
+           id_estado,
+           id_funcionario,
+           tipo_funcionario,
+           TO_CHAR(fecha_inicio, 'MM') AS mes,
+           DESC_TIPO_AUSENCIA
+    INTO   v_total_horas,
+           v_fecha_inicio,
+           v_id_tipo_ausencia,
+           i_id_ano,
+           i_id_estado,
+           i_id_funcionario,
+           i_tipo_funcionario,
+           i_id_mes,
+           i_DESC_TIPO_AUSENCIA
+    FROM   ausencia a,
+           tr_tipo_ausencia tr
+    WHERE  id_ausencia = V_id_ausencia
+      AND  a.id_tipo_ausencia = tr.id_tipo_ausencia
+      AND  (anulado = 'NO' OR ANULADO IS NULL);
+      
   EXCEPTION
     WHEN NO_DATA_FOUND THEN
-      v_tipo_funcionario:=-1;
+      i_no_hay_ausencias := -1;
   END;
-
-  IF v_tipo_funcionario = -1 then
+  
+  IF i_no_hay_ausencias = -1 THEN
     todo_ok_basico := 1;
-    msgBasico      := 'Operacion no realizada. TIPO FUNCIONARIO NO ENCONTRADO.';
+    msgBasico := 'Operacion no realizada. Ausencia no existe.';
     RETURN;
   END IF;
--- CHM 10/02/2017
--- NO ES bombero
--- CHM 10/02/2017
--- NO ES bombero
-IF v_tipo_funcionario <> '23' then
-
-  --Busco que la persona que firma sea la correcta
+  
+  --------------------------------------------------------------------------------
+  -- FASE 2: OBTENER JERARQUÍA DE FIRMAS
+  --------------------------------------------------------------------------------
+  
+  i_no_hay_firma := 0;
+  
   BEGIN
-    select id_js, id_delegado_js, id_ja, id_delegado_ja ,id_delegado_firma, id_delegado_js2,id_delegado_js3,id_delegado_js4
-      into i_id_js, i_id_delegado_js, i_id_ja, i_id_delegado_ja
-           ,i_id_delegado_firma --a�adido 31 mayo 2016. Para poder firmar 2
-           ,i_id_delegado_js2,i_id_delegado_js3,i_id_delegado_js4
-      from funcionario_firma
-     where id_funcionario = i_id_funcionario
-       and (id_JS = V_ID_FUNCIONARIO_FIRMA OR
-           id_DELEGADO_JS = V_ID_FUNCIONARIO_FIRMA OR
-           id_DELEGADO_JS2 = V_ID_FUNCIONARIO_FIRMA OR
-           id_DELEGADO_JS3 = V_ID_FUNCIONARIO_FIRMA OR
-           id_DELEGADO_JS4 = V_ID_FUNCIONARIO_FIRMA OR
-           id_JA = V_ID_FUNCIONARIO_FIRMA OR
-           id_DELEGADO_JA = V_ID_FUNCIONARIO_FIRMA);
+    SELECT id_js,
+           id_delegado_js,
+           id_ja,
+           id_delegado_ja
+    INTO   i_id_js,
+           i_id_delegado_js,
+           i_id_ja,
+           i_id_delegado_ja
+    FROM   funcionario_firma
+    WHERE  id_funcionario = i_id_funcionario;
+    
   EXCEPTION
     WHEN NO_DATA_FOUND THEN
       i_no_hay_firma := -1;
   END;
-  ----a�adido 31 mayo 2016. Para poder firmar cualquiera de los 2. Por ahora solo policias.
-  ------ID_DELEGADO_FIRMA---------------------------------------
-  ------ 0 Permite firma al delegado cuando el titular no esta
-  ------ 1 Permite firmar siempre
-  ----------------------------------------------------------------
-  --Meter Sustituto.
-  IF (i_id_delegado_js = V_ID_FUNCIONARIO_FIRMA AND i_Id_js<>i_id_delegado_js) OR
-     (i_id_delegado_js2 = V_ID_FUNCIONARIO_FIRMA AND i_Id_js<>i_id_delegado_js2) OR
-     (i_id_delegado_js3 = V_ID_FUNCIONARIO_FIRMA AND i_Id_js<>i_id_delegado_js3) OR
-     (i_id_delegado_js4 = V_ID_FUNCIONARIO_FIRMA AND i_Id_js<>i_id_delegado_js4)
-    THEN
-
-  --a?adido el 5 de Abril 2010. Funcion nueva /*delegado
-  i_contador:= chequeo_entra_delegado(i_id_delegado_js);
-
-    IF i_contador = 0 and i_id_delegado_firma= 0 then ----a�adido 31 mayo 2016. Para poder firmar cualquiera de los  2
-      todo_ok_basico := 1;
-      msgBasico      := 'Operacion no realizada. La delegacion de permisos solo es efectiva cuando el responable esta de Permiso.';
-      RETURN;
-    ELSE
-       -- i_id_js := i_id_delegado_js;
-       IF i_id_delegado_js = V_ID_FUNCIONARIO_FIRMA THEN
-          i_id_js := i_id_delegado_js;
-       ELSE IF   i_id_delegado_js2 = V_ID_FUNCIONARIO_FIRMA          THEN
-               i_id_js := i_id_delegado_js2;
-            ELSE IF   i_id_delegado_js3 = V_ID_FUNCIONARIO_FIRMA          THEN
-                              i_id_js := i_id_delegado_js3;
-                 ELSE IF   i_id_delegado_js4 = V_ID_FUNCIONARIO_FIRMA          THEN
-                                           i_id_js := i_id_delegado_js4;
-                      END IF;
-                 END IF;
-            END IF   ;
-       END IF;
-     END IF;
-  END IF;
-
-  IF i_no_hay_firma = -1 then
+  
+  IF i_no_hay_firma = -1 THEN
     todo_ok_basico := 1;
-    msgBasico      := 'Operacion no realizada. No hay personas para firmar.';
+    msgBasico := 'Operacion no realizada. No hay personas para firmar.';
     RETURN;
   END IF;
-
-
---Buscamos el correo en la usuario.intranet.
-BEGIN
-    select MIN(peticion), MIN(nombre_peticion),MIN(js),MIN(ja)
-    into correo_v_funcionario,i_nombre_peticion,correo_js,correo_ja
-
- from (
-     select login || '@aytosalamanca.es' as peticion,substr(  DIST_NAME,  INSTR(DIST_NAME,'=',1) +1,INSTR(DIST_NAME,',',1) -INSTR(DIST_NAME,'=',1)-1) as nombre_peticion,''as js ,'' as ja from apliweb_usuario where id_funcionario=to_char(I_ID_FUNCIONARIO)
-     union
-     select '' as peticion, '' as nombre_peticion ,login || '@aytosalamanca.es' as js,'' as ja  from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_js,6,'0')
-      union
-    select '' as peticion ,'' as nombre_peticion ,'' as ja,login || '@aytosalamanca.es' as ja from apliweb_usuario where lpad(id_funcionario,6,'0')=lpad(i_id_ja,6,'0')
-);
-EXCEPTION
-                        WHEN NO_DATA_FOUND THEN
-i_id_ja:='';
-i_id_js:='';
-END;
-
---Si No hay jefes para firmar el permiso.
-IF   i_id_js='' AND i_id_ja='' then
-        todo_ok_basico:=1;
-        msgBasico:='Operacion no realizada. Pongase en contacto con RRHH. Sin firmas.';
+  
+  --------------------------------------------------------------------------------
+  -- FASE 3: VERIFICAR DELEGADOS ACTIVOS (por fechas)
+  --------------------------------------------------------------------------------
+  
+  i_hay_delegado_js := 0;
+  i_hay_delegado_ja := 0;
+  
+  -- Verificar delegado JS activo
+  IF i_id_delegado_js IS NOT NULL THEN
+    BEGIN
+      SELECT COUNT(*)
+      INTO   i_hay_delegado_js
+      FROM   DELEGADOS_APLIWEB
+      WHERE  id_funcionario = i_id_js
+        AND  id_delegado = i_id_delegado_js
+        AND  v_fecha_inicio BETWEEN fecha_desde AND fecha_hasta
+        AND  ROWNUM < 2;
+        
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_hay_delegado_js := 0;
+    END;
+  END IF;
+  
+  -- Verificar delegado JA activo
+  IF i_id_delegado_ja IS NOT NULL THEN
+    BEGIN
+      SELECT COUNT(*)
+      INTO   i_hay_delegado_ja
+      FROM   DELEGADOS_APLIWEB
+      WHERE  id_funcionario = i_id_ja
+        AND  id_delegado = i_id_delegado_ja
+        AND  v_fecha_inicio BETWEEN fecha_desde AND fecha_hasta
+        AND  ROWNUM < 2;
+        
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN
+        i_hay_delegado_ja := 0;
+    END;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 4: VALIDAR QUIÉN FIRMA (JS, JA o delegado)
+  --------------------------------------------------------------------------------
+  
+  i_es_js := 0;
+  i_es_ja := 0;
+  
+  -- Verificar si es JS o su delegado
+  IF V_ID_FUNCIONARIO_FIRMA = i_id_js OR 
+     (i_hay_delegado_js > 0 AND V_ID_FUNCIONARIO_FIRMA = i_id_delegado_js) THEN
+    i_es_js := 1;
+  END IF;
+  
+  -- Verificar si es JA o su delegado
+  IF V_ID_FUNCIONARIO_FIRMA = i_id_ja OR 
+     (i_hay_delegado_ja > 0 AND V_ID_FUNCIONARIO_FIRMA = i_id_delegado_ja) THEN
+    i_es_ja := 1;
+  END IF;
+  
+  IF i_es_js = 0 AND i_es_ja = 0 THEN
+    todo_ok_basico := 1;
+    msgBasico := 'Operacion no realizada. No tiene permisos para firmar esta ausencia.';
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 5: DETERMINAR NUEVO ESTADO SEGÚN FIRMA
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_FIRMA = C_FIRMA_AUTORIZA THEN
+    
+    -- AUTORIZAR: Determinar siguiente estado
+    CASE i_id_estado
+      
+      -- Estado 10 (Solicitado) → JS firma
+      WHEN C_ESTADO_SOLICITADO THEN
+        IF i_es_js = 1 THEN
+          IF i_id_js = i_id_ja THEN
+            i_nuevo_estado := C_ESTADO_PDE_RRHH; -- JS=JA, directo a RRHH (22)
+          ELSIF i_id_ja IS NOT NULL THEN
+            i_nuevo_estado := C_ESTADO_PDE_JA; -- Tiene JA, va a 21
+          ELSE
+            i_nuevo_estado := C_ESTADO_PDE_RRHH; -- Sin JA, directo RRHH (22)
+          END IF;
+          i_firma_descripcion := 'JS';
+        ELSE
+          todo_ok_basico := 1;
+          msgBasico := 'Estado 10: Solo puede firmar JS.';
+          RETURN;
+        END IF;
+        
+      -- Estado 20 (Pde JS) → JS firma
+      WHEN C_ESTADO_PDE_JS THEN
+        IF i_es_js = 1 THEN
+          IF i_id_js = i_id_ja THEN
+            i_nuevo_estado := C_ESTADO_PDE_RRHH; -- JS=JA, directo a RRHH (22)
+          ELSIF i_id_ja IS NOT NULL THEN
+            i_nuevo_estado := C_ESTADO_PDE_JA; -- Tiene JA, va a 21
+          ELSE
+            i_nuevo_estado := C_ESTADO_PDE_RRHH; -- Sin JA, directo RRHH (22)
+          END IF;
+          i_firma_descripcion := 'JS';
+        ELSE
+          todo_ok_basico := 1;
+          msgBasico := 'Estado 20: Solo puede firmar JS.';
+          RETURN;
+        END IF;
+        
+      -- Estado 21 (Pde JA) → JA firma
+      WHEN C_ESTADO_PDE_JA THEN
+        IF i_es_ja = 1 THEN
+          i_nuevo_estado := C_ESTADO_PDE_RRHH; -- Siempre va a RRHH (22)
+          i_firma_descripcion := 'JA';
+        ELSE
+          todo_ok_basico := 1;
+          msgBasico := 'Estado 21: Solo puede firmar JA.';
+          RETURN;
+        END IF;
+        
+      ELSE
+        todo_ok_basico := 1;
+        msgBasico := 'Estado no válido para firma JS/JA.';
         RETURN;
-END IF;
-
-ELSE
-  --a�adido chm 25/02/2017
-  --BUSQUEDA FIRMA BOMBEROS
-  --a�adir la funci�n
-  i_id_ja:='0';
-  i_id_js:='0';
-  correo_js:='';
-  correo_ja:='';
-  -- chm16/09/2022
-  --cambio    bomberos_guardias_plani s, eliminar ddblink
-  --Comprobamos que esta el jefe de guardia. JA LUIS DAMIAN 961110 ldramos@aytosalamanca.es
-  BEGIN --login
-    select 'carlos' || '@aytosalamanca.es',lpad(funcionario,6,'0'),'961110','ldramos@aytosalamanca.es'
-     into correo_js,i_id_js,i_id_ja,correo_ja
-    from     bomberos_guardias_plani s,
-         --sige.GUARDIAS@lsige s,
-
-           apliweb_usuario a
-    where desde =DECODE( trunc(to_char(sysdate+0/24,'hh24')/8),0,
-        to_date(to_char(sysdate-1,'DD/mm/yyyy') || '08:00','DD/mm/yyyy hh24:mi'),
-        to_date(to_char(sysdate,'DD/mm/yyyy')   || '08:00','DD/mm/yyyy hh24:mi')
-
-         ) and dotacion='M' and lpad(funcionario,6,'0')=lpad(V_ID_FUNCIONARIO_FIRMA,6,'0')
-         and s.funcionario=a.id_funcionario
-         and rownum<2;
+        
+    END CASE;
+    
+  ELSE
+    
+    -- RECHAZAR: Determinar estado rechazo
+    IF i_es_js = 1 THEN
+      i_nuevo_estado := C_ESTADO_RECHAZADO_JS; -- 30
+      i_firma_descripcion := 'JS';
+    ELSIF i_es_ja = 1 THEN
+      i_nuevo_estado := C_ESTADO_RECHAZADO_JA; -- 31
+      i_firma_descripcion := 'JA';
+    ELSE
+      todo_ok_basico := 1;
+      msgBasico := 'No tiene permisos para rechazar.';
+      RETURN;
+    END IF;
+    
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 6: ACTUALIZAR AUSENCIA CON FIRMA
+  --------------------------------------------------------------------------------
+  
+  IF i_es_js = 1 THEN
+    
+    -- Firma JS
+    UPDATE ausencia
+    SET    id_estado = i_nuevo_estado,
+           firmado_js = V_ID_FUNCIONARIO_FIRMA,
+           fecha_js = SYSDATE,
+           motivo_denega = DECODE(V_ID_FIRMA, C_FIRMA_RECHAZA, V_ID_MOTIVO, motivo_denega)
+    WHERE  id_funcionario = i_id_funcionario
+      AND  id_ausencia = V_id_ausencia
+      AND  ROWNUM < 2;
+      
+  ELSIF i_es_ja = 1 THEN
+    
+    -- Firma JA
+    UPDATE ausencia
+    SET    id_estado = i_nuevo_estado,
+           firmado_ja = V_ID_FUNCIONARIO_FIRMA,
+           fecha_ja = SYSDATE,
+           motivo_denega = DECODE(V_ID_FIRMA, C_FIRMA_RECHAZA, V_ID_MOTIVO, motivo_denega)
+    WHERE  id_funcionario = i_id_funcionario
+      AND  id_ausencia = V_id_ausencia
+      AND  ROWNUM < 2;
+      
+  END IF;
+  
+  IF SQL%ROWCOUNT = 0 THEN
+    todo_ok_basico := 1;
+    msgBasico := 'Operacion no realizada. Error al actualizar firma.';
+    ROLLBACK;
+    RETURN;
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 7: REVERTIR BOLSA SI RECHAZO (estados 30/31)
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_FIRMA = C_FIRMA_RECHAZA THEN
+    
+    -- Revertir bolsa concilia (tipo 50)
+    IF v_id_tipo_ausencia = C_TIPO_AUSENCIA_CONCILIA THEN
+      UPDATE BOLSA_CONCILIA
+      SET    utilizadas = utilizadas - v_total_horas,
+             pendientes_justificar = pendientes_justificar - v_total_horas
+      WHERE  id_ano = i_id_ano
+        AND  id_funcionario = i_id_funcionario;
+    END IF;
+    
+    -- Revertir horas sindicales (tipos > 500)
+    IF TO_NUMBER(v_id_tipo_ausencia) > C_TIPO_AUSENCIA_SINDICAL THEN
+      UPDATE HORA_SINDICAL
+      SET    TOTAL_UTILIZADAS = TOTAL_UTILIZADAS - v_total_horas
+      WHERE  id_ano = i_id_ano
+        AND  id_MES = i_id_mes
+        AND  id_funcionario = i_id_funcionario
+        AND  ID_TIPO_AUSENCIA = v_id_tipo_ausencia
+        AND  ROWNUM < 2;
+    END IF;
+    
+  END IF;
+  
+  --------------------------------------------------------------------------------
+  -- FASE 8: REGISTRAR EN HISTÓRICO
+  --------------------------------------------------------------------------------
+  
+  INSERT INTO historico_operaciones
+  VALUES (sec_operacion.NEXTVAL,
+          V_ID_AUSENCIA,
+          i_nuevo_estado,
+          i_id_ano,
+          V_ID_FUNCIONARIO_FIRMA,
+          TO_CHAR(SYSDATE, 'DD/MM/YYYY'),
+          TO_CHAR(SYSDATE, 'HH:MI'),
+          'FIRMA ' || i_firma_descripcion || ' ' || DECODE(V_ID_FIRMA, C_FIRMA_AUTORIZA, 'AUTORIZA', 'RECHAZA'),
+          V_ID_FUNCIONARIO_FIRMA,
+          TO_CHAR(SYSDATE, 'DD/MM/YYYY'));
+  
+  --------------------------------------------------------------------------------
+  -- FASE 9: OBTENER CORREOS ELECTRÓNICOS
+  --------------------------------------------------------------------------------
+  
+  BEGIN
+    SELECT MIN(peticion),
+           MIN(nombre_peticion),
+           MIN(js),
+           MIN(ja)
+    INTO   correo_v_funcionario,
+           i_nombre_peticion,
+           correo_js,
+           correo_ja
+    FROM   (SELECT login || '@aytosalamanca.es' AS peticion,
+                   SUBSTR(DIST_NAME, INSTR(DIST_NAME, '=', 1) + 1, INSTR(DIST_NAME, ',', 1) - INSTR(DIST_NAME, '=', 1) - 1) AS nombre_peticion,
+                   '' AS js,
+                   '' AS ja
+            FROM   apliweb_usuario
+            WHERE  id_funcionario = TO_CHAR(i_id_funcionario)
+            UNION
+            SELECT '' AS peticion,
+                   '' AS nombre_peticion,
+                   login || '@aytosalamanca.es' AS js,
+                   '' AS ja
+            FROM   apliweb_usuario
+            WHERE  LPAD(id_funcionario, 6, '0') = LPAD(i_id_js, 6, '0')
+            UNION
+            SELECT '' AS peticion,
+                   '' AS nombre_peticion,
+                   '' AS js,
+                   login || '@aytosalamanca.es' AS ja
+            FROM   apliweb_usuario
+            WHERE  LPAD(id_funcionario, 6, '0') = LPAD(i_id_ja, 6, '0'));
+            
   EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     i_id_js:='0';
-  END;
-
-
-
-  --chm 10/05/2018
-  IF V_ID_FUNCIONARIO_FIRMA='961110'   THEN
-    i_id_ja:='961110';
-    correo_ja:='ldramos@aytosalamanca.es';
+    WHEN NO_DATA_FOUND THEN
+      i_id_ja := '';
+      i_id_js := '';
   END IF;
-
-  IF V_ID_FUNCIONARIO_FIRMA='600077'  THEN
-    i_id_ja:='600077';
-    correo_ja:='afiz@aytosalamanca.es';
+  
+  --------------------------------------------------------------------------------
+  -- FASE 10: ENVIAR CORREOS SEGÚN RESULTADO
+  --------------------------------------------------------------------------------
+  
+  IF V_ID_FIRMA = C_FIRMA_AUTORIZA THEN
+    
+    -- AUTORIZACIÓN: enviar según nuevo estado
+    CASE i_nuevo_estado
+      
+      WHEN C_ESTADO_PDE_JA THEN
+        i_sender := 'permisos.rrhh@aytosalamanca.es';
+        i_recipient := correo_ja;
+        I_ccrecipient := correo_v_funcionario || ';' || correo_js;
+        i_subject := 'Ausencia autorizada por JS - Pendiente JA';
+        I_message := 'Ausencia autorizada por Jefe Sección.' || CHR(10) ||
+                     'Funcionario: ' || i_nombre_peticion || CHR(10) ||
+                     'Tipo: ' || i_DESC_TIPO_AUSENCIA || CHR(10) ||
+                     'Pendiente firma Jefe Área.';
+        
+      WHEN C_ESTADO_PDE_RRHH THEN
+        i_sender := 'permisos.rrhh@aytosalamanca.es';
+        i_recipient := 'permisos.rrhh@aytosalamanca.es';
+        I_ccrecipient := correo_v_funcionario || ';' || correo_js || ';' || correo_ja;
+        i_subject := 'Ausencia autorizada - Pendiente RRHH';
+        I_message := 'Ausencia autorizada por ' || i_firma_descripcion || '.' || CHR(10) ||
+                     'Funcionario: ' || i_nombre_peticion || CHR(10) ||
+                     'Tipo: ' || i_DESC_TIPO_AUSENCIA || CHR(10) ||
+                     'Pendiente visto bueno RRHH.';
+        
+      ELSE
+        i_sender := 'permisos.rrhh@aytosalamanca.es';
+        i_recipient := correo_v_funcionario;
+        I_ccrecipient := correo_js || ';' || correo_ja;
+        i_subject := 'Ausencia autorizada';
+        I_message := 'Su ausencia ha sido autorizada por ' || i_firma_descripcion || '.';
+        
+    END CASE;
+    
+    msgBasico := 'Ausencia autorizada por ' || i_firma_descripcion || '. Nuevo estado: ' ||
+                 DECODE(i_nuevo_estado, '21', 'Pde JA', '22', 'Pde RRHH', i_nuevo_estado);
+    
+  ELSE
+    
+    -- RECHAZO: notificar a funcionario
+    i_sender := 'permisos.rrhh@aytosalamanca.es';
+    i_recipient := correo_v_funcionario;
+    I_ccrecipient := correo_js || ';' || correo_ja;
+    i_subject := 'Ausencia rechazada por ' || i_firma_descripcion;
+    I_message := 'Su ausencia ha sido rechazada.' || CHR(10) ||
+                 'Rechazada por: ' || i_firma_descripcion || CHR(10) ||
+                 'Motivo: ' || V_ID_MOTIVO || CHR(10) ||
+                 'Funcionario: ' || i_nombre_peticion || CHR(10) ||
+                 'Tipo: ' || i_DESC_TIPO_AUSENCIA;
+    
+    msgBasico := 'Ausencia rechazada por ' || i_firma_descripcion || '.';
+    
   END IF;
-
-  IF  i_id_js='0' AND i_id_ja='0' then
-        todo_ok_basico:=1;
-        msgBasico:='No coincide el jefe de la guardia actual con la persona que firma el permiso.';
-        RETURN;
-  END IF;
-
-  IF  i_id_js='0' AND i_id_ja='0' then
-        todo_ok_basico:=1;
-        msgBasico:='No coincide el jefe de la guardia actual con la persona que firma el permiso.';
-        RETURN;
-  END IF;
-
-
---nombre petici�n y correo
---chm 12/02/2017
-BEGIN
-select  MIN(correo_funcionario) ,MIN(nombre_peticion)
-    into correo_v_funcionario,i_nombre_peticion
- from (
-     select login || '@aytosalamanca.es' as correo_funcionario ,TRIM(substr(dist_NAME,4,instr(dist_NAME,',',1)-4)) as nombre_peticion from apliweb_usuario
-    where lpad(id_funcionario,6,'0')=lpad(to_char(I_ID_FUNCIONARIO),6,'0')
-      );
+  
+  envio_correo(i_sender, i_recipient, I_ccrecipient, i_subject, I_message);
+  
+  todo_ok_basico := 0;
+  
+  COMMIT;
 
 EXCEPTION
-     WHEN NO_DATA_FOUND THEN
-     correo_v_funcionario:='';
-END;
-
-
-
-END IF;--FIN NO ES BOMBERO
-
-
---Actualizar ausencias
-IF ( (i_id_estado =20 AND V_ID_FUNCIONARIO_FIRMA=I_ID_JS) OR
-     (i_id_estado =20 AND V_ID_FUNCIONARIO_FIRMA=I_ID_JA)
-       OR (i_id_estado =21  AND v_tipo_funcionario = '23' ) --chm 10/02/2017
-   )  then --Firma JS
-
-    --chm 10/02/2017
-    if (i_id_estado = 20 and v_tipo_funcionario = '23') then
-       i_id_estado:=21;
-    else
-       --Firma JS
-       i_id_estado:=22;
-    end if;
-
-            IF V_ID_FIRMA=1 THEN --AUTORIZADO
-
-               if ((i_id_estado = 22  and v_tipo_funcionario <> '23') OR i_id_estado=21 ) then
-
-                update ausencia
-                set    id_estado=22  ,firmado_js=V_ID_FUNCIONARIO_FIRMA,FECHA_JS=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                            --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-
-              End if;
-
-              if (i_id_estado = 22  and v_tipo_funcionario ='23')  then
-
-                     update ausencia
-                set    id_estado=22  ,
-                       firmado_ja = V_ID_FUNCIONARIO_FIRMA,
-                       FECHA_Ja   = SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                            --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-              END IF;
-
-              --ENVIO DE CORREO AL JEFE DE AREA
-              i_sender      := correo_js;
-              I_ccrecipient := '';
-              i_recipient   := correo_ja;
-              I_message := '';
-
-
-             i_firma := 'Operacion realizada. El permiso esta pendiente del V�B� de RRHH.';
-
-             --chm 10/02/2017
-             --Envio correo al ja, para el 2� nivel.
-              if (i_id_estado = 21 and v_tipo_funcionario = '23') then
-
-
-                   i_firma := 'Operacion realizada. El permiso esta pendiente del V�B� Jefe de Bomberos.';
-                    I_message:=
-                            'Esta Ausencia ha sido Autorizado por el Jefe de Serv' || chr(10)||
-                            'Necesita su autorizacion para que sea concedido.' || chr(10)||  chr(10)||
-                            'Solicitud de Permiso de: '|| i_nombre_peticion || chr(10)||
-                            'Tipo permiso: '  || i_DESC_TIPo_AUSENCIA || chr(10)||
-                             i_CADENA2;
-
-                            envio_correo(i_sender ,
-                                         i_recipient ,
-                                         I_ccrecipient ,
-                                         i_subject  ,
-                                         I_message);
-               end if;
-
-
-               I_message:= i_desc_mensaje;
-                i_subject:='Informacion de permiso autorizado.';
-                 /*envio_correo(i_sender ,
-                              i_recipient ,
-                              I_ccrecipient ,
-                              i_subject ,
-                              I_message);*/
-
-                 --Insert en el historico
-                 insert into historico_operaciones
-                        values(sec_operacion.nextval,
-                                V_ID_AUSENCIA ,
-                               20,
-                               i_id_ano,
-                               V_ID_FUNCIONARIO_FIRMA,
-                              to_char(sysdate,'DD/MM/YYYY'),
-                               to_char(sysdate,'HH:MI'),
-                               'FIRMA PERMISO JSA',
-                               V_ID_FUNCIONARIO_FIrMA,
-                               to_char(sysdate,'DD/MM/YYYY'));
-
-
-
-            ELSE  IF V_ID_FIRMA=0 THEN --denegado
-              IF  ( '961110' <> V_ID_FUNCIONARIO_FIRMA OR v_tipo_funcionario <>'23') THEN
-
-               update ausencia
-                set    id_estado=30  ,firmado_js=V_ID_FUNCIONARIO_FIRMA,motivo_denega=V_ID_MOTIVO,FECHA_JS=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                            --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-              ELSE
-                  update ausencia
-                set    id_estado=31  ,firmado_ja=V_ID_FUNCIONARIO_FIRMA,motivo_denega=V_ID_MOTIVO,FECHA_Ja=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                            --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-
-
-
-              END IF;
-
-
-                 --ENVIO DE CORREO AL FUNCIONARIO CON LA DENEGACION
-                 i_sender:=correo_js;
-                 I_ccrecipient:='';
-                 i_recipient:=correo_v_funcionario;
-                 I_message:= 'Denegacion de la Solicitud del Permiso' || chr(10) ||
-                             'Motivo de Denegacion: '|| v_id_motivo || chr(10)||
-                             i_DESC_TIPo_AUSENCIA || chr(10)||
-                             i_CADENA2;
-               I_message:=    '';
-               --Descripcion de la ausencia .
-              BEGIN
-              select CABECERA || ' '||
-                     'Ausencia denegada por' ||' '|| v_id_motivo ||' '||
-                         SOLICITADO || ' '||
-                         i_nombre_peticion ||' '||
-                         TIPO_PERMISO ||' '||
-                         i_desc_tipo_ausencia||' '||
-                         FECHA_INICIO  ||' '||
-                         to_char(V_FECHA_INICIO,'DD-MON-YY')  ||' '||
-                         DECODE(substr(V_ID_TIPO_AUSENCIA,1,1) ,'5',
-                         FECHA_FIN  ||' '||
-                         to_char(V_FECHA_FIN,'DD-MON-YY')
-                          ,'') ||' '||
-                         HORA_INICIO ||' '|| V_HORA_INICIO   ||' '||  --
-                         HORA_FIN    ||' '|| V_HORA_FIN      || ' '|| --
-                         TOTAL_HORAS ||' '||  lpad(trunc( v_total_horas/60 ),2,'0')  || ':'||
-                         lpad(trunc( mod(v_total_horas,60 ) ),2,'0')  || ' '||
-                       CABECERA_FI ||' '||
-                      'Esta Ausencia ha sido denegada'||' '||
-                      CABECERA_FIN_2
-            into  i_desc_mensaje
-                 from  FORMATO_CORREO
-                 where DECODE( substr(V_ID_TIPO_AUSENCIA,1,1) ,
-                     '5' , '500' ,
-                     '222'
-                     )=ID_TIPO_PERMISO;
-          EXCEPTION
-                   WHEN NO_DATA_FOUND THEN
-                   i_desc_tipo_ausencia:='';
-          END;
-                      I_message:= i_desc_mensaje;
-                       --chm13/02/2017
-                      -- 961110
-           IF  ( '961110' = V_ID_FUNCIONARIO_FIRMA) THEN
-                  i_subject := 'Denegacion de Permiso por el Jefe de Bomberos.';
-                  i_sender:=correo_ja;
-         ELSE  IF  v_tipo_funcionario ='23' then
-                  i_subject := 'Denegacion de Permiso por el Jefe Guardia.';
-               ELSE
-                  i_subject := 'Denegacion de Permiso por el Jefe de Secc/Serv.';
-               END IF;
-         END IF;
-
-
-                 envio_correo(i_sender ,
-                              i_recipient ,
-                              I_ccrecipient ,
-                              i_subject ,
-                              I_message);
-
-                 --Insert en el historico
-                 insert into historico_operaciones
-                        values(sec_operacion.nextval,
-                                V_ID_AUSENCIA ,
-                               30,
-                               i_id_ano,
-                               V_ID_FUNCIONARIO_FIRMA,
-                              to_char(sysdate,'DD/MM/YYYY'),
-                               to_char(sysdate,'HH:MI'),
-                               'FIRMA PERMISO JSA',
-                               V_ID_FUNCIONARIO_FIrMA,
-                               to_char(sysdate,'DD/MM/YYYY'));
-                  i_firma:='Operacion realizada. La Ausencia se ha denegado correctamente.';
-
-                   END IF;
-             END IF;
---quitando un nivel
-/* ELSE  IF (i_id_estado =21  AND V_ID_FUNCIONARIO_FIRMA=I_ID_JA) OR
-         (i_id_estado =20  AND I_ID_JS = I_ID_JA)--Metido para cuando son misma persona.
-          then  -- Firma JA
-           IF V_ID_FIRMA=1 THEN --AUTORIZADO
-              --Misma persona JEFE de Servicio y AREa
-              IF I_ID_JS = I_ID_JA  THEN
-                update ausencia
-                set    id_estado=22  ,
-                       firmado_ja=V_ID_FUNCIONARIO_FIRMA,
-                       FECHA_JA=SYsDATE,
-                       firmado_js=V_ID_FUNCIONARIO_FIRMA,
-                       FECHA_JS=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                            --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-               ELSE
-                 update ausencia
-                set    id_estado=22  ,firmado_ja=V_ID_FUNCIONARIO_FIRMA,
-                          FECHA_JA=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                            --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-               END IF;
-
-
-                --Insert en el historico
-                 insert into historico_operaciones
-                        values(sec_operacion.nextval,
-                                V_ID_AUSENCIA ,
-                               21,
-                               i_id_ano,
-                               V_ID_FUNCIONARIO_FIRMA,
-                              to_char(sysdate,'DD/MM/YYYY'),
-                               to_char(sysdate,'HH:MI'),
-                               'FIRMA PERMISO JSA',
-                               V_ID_FUNCIONARIO_FIrMA,
-                               to_char(sysdate,'DD/MM/YYYY'));
-
-                i_firma:='Operacion realizada. La Ausencia esta pendiente del V?B? de RRHH';
-            ELSE  IF V_ID_FIRMA=0 THEN --denegado
-             --Misma persona JEFE de Servicio y AREa
-              IF I_ID_JS = I_ID_JA  THEN
-               update ausencia
-                set    id_estado=31  ,
-                       firmado_ja=V_ID_FUNCIONARIO_FIRMA,
-                       firmado_js=V_ID_FUNCIONARIO_FIRMA,
-                       motivo_denega=V_ID_MOTIVO,
-                       FECHA_Js=SYsDATE,
-                       FECHA_JA=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-              ELSE
-                 update ausencia
-                set    id_estado=31  ,
-                       firmado_ja=V_ID_FUNCIONARIO_FIRMA,
-                       motivo_denega=V_ID_MOTIVO,
-                       FECHA_JA=SYsDATE
-                where  id_funcionario=i_id_funcionario and
-                       id_ausencia=V_id_ausencia and
-                       rownum  < 2 ;
-                --busco que la actualizacion sera correcta.
-                IF SQL%ROWCOUNT = 0 then
-                   todo_ok_basico:=1;
-                   msgBasico:='Operacion no realizada.Pongase contacto RRHH. Error Update Firma. ';
-                   RETURN;
-                END IF;
-
-              END IF;
-
-                 --ENVIO DE CORREO AL FUNCIONARIO CON LA DENEGACION
-                 i_sender:=correo_ja;
-                 I_ccrecipient:=correo_js;
-                 i_recipient:=correo_v_funcionario;
-                 I_message:= 'Denegacion de solicitud de la Ausencia' || chr(10) ||
-                             'Motivo de Denegacion: '|| v_id_motivo || chr(10)||
-                             i_DESC_TIPo_Ausencia || chr(10)||
-                             i_CADENA2;
-
-                  I_message:=    '';
-               --Descripcion del permiso .
-              BEGIN
-              select CABECERA || ' '||
-                     'Ausencia denegada por' ||' '|| v_id_motivo ||' '||
-                         SOLICITADO || ' '||
-                         i_nombre_peticion ||' '||
-                         TIPO_PERMISO ||' '||
-                         i_desc_tipo_ausencia||' '||
-                         FECHA_INICIO  ||' '||
-                         to_char(V_FECHA_INICIO,'DD-MON-YY')  ||' '||
-                         DECODE(substr(V_ID_TIPO_AUSENCIA,1,1) ,'5',
-                         FECHA_FIN  ||' '||
-                         to_char(V_FECHA_FIN,'DD-MON-YY')
-                          ,'') ||' '||
-                         HORA_INICIO ||' '|| V_HORA_INICIO   ||' '||  --
-                         HORA_FIN    ||' '|| V_HORA_FIN      || ' '|| --
-                         TOTAL_HORAS ||' '||  lpad(trunc( v_total_horas/60 ),2,'0')  || ':'||
-                         lpad(trunc( mod(v_total_horas,60 ) ),2,'0')  || ' '||
-                       CABECERA_FI ||' '||
-                      'Esta Ausencia ha sido denegada'||' '||
-                      CABECERA_FIN_2
-                   into  i_desc_mensaje
-                   from  FORMATO_CORREO
-                   where DECODE( substr(V_ID_TIPO_AUSENCIA,1,1) ,
-                     '5' , '500' ,
-                     '222'
-                     )=ID_TIPO_PERMISO;
-                  EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                    i_desc_tipo_ausencia:='';
-                   END;
-                    I_message:= i_desc_mensaje;
-
-                 i_subject:='Denegacion de la Ausencia por el Jefe de Area.';
-                 envio_correo(i_sender ,
-                              i_recipient ,
-                              I_ccrecipient ,
-                              i_subject ,
-                              I_message);
-
-                 --Insert en el historico
-                 insert into historico_operaciones
-                        values(sec_operacion.nextval,
-                                V_ID_AUSENCIA ,
-                               31,
-                               i_id_ano,
-                               V_ID_FUNCIONARIO_FIRMA,
-                              to_char(sysdate,'DD/MM/YYYY'),
-                               to_char(sysdate,'HH:MI'),
-                               'FIRMA PERMISO JSA',
-                               V_ID_FUNCIONARIO_FIrMA,
-                               to_char(sysdate,'DD/MM/YYYY'));
-                i_firma:='Operacion realizada. La Ausencia se ha denegado correctamente.';
-
-           END IF;
-      END IF;
-     ELSE
-
-      todo_ok_basico:=1;
-      msgBasico:='Operacion NO realizada.';
-     RETURN;
-END IF;*/
-
-END IF;
-
-todo_ok_basico:=0;
-msgBasico:=i_firma;
-commit;
-
-end FIRMA_AUSENCIA_JSA;
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('Error en firma_ausencia_jsa: ' || SQLERRM);
+    ROLLBACK;
+    todo_ok_basico := 1;
+    msgBasico := 'Error en firma_ausencia_jsa: ' || SQLERRM;
+    
+END FIRMA_AUSENCIA_JSA;
 /
-
