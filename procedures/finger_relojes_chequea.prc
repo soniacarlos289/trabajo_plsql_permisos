@@ -1,95 +1,154 @@
-CREATE OR REPLACE PROCEDURE RRHH."FINGER_RELOJES_CHEQUEA" is
+CREATE OR REPLACE PROCEDURE RRHH.FINGER_RELOJES_CHEQUEA IS
+  /**
+   * @description Chequea el estado de los relojes de fichaje y envía alertas por correo en caso de inactividad
+   * @details Proceso de monitoreo que detecta relojes de fichaje sin transacciones el día actual (laborable).
+   *          Verifica última transacción de cada reloj activo en últimos 15 días:
+   *          - Si última transacción NO es de hoy → reloj posiblemente averiado
+   *          - Solo envía alertas en días laborables (lunes a viernes, excluyendo sábado/domingo)
+   *          - Envía correos de alerta a carlos@aytosalamanca.es y permisos@aytosalamanca.es
+   *          - Registra relojes problemáticos en tabla temp_reloj_ko para seguimiento
+   * @notes 
+   *   - Relojes excluidos del chequeo: 91, MA, 88, 90
+   *   - Ventana temporal: últimos 15 días (desde sysdate-15)
+   *   - Solo relojes con activo='S' en tabla relojes
+   *   - Limpia temp_reloj_ko al inicio de cada ejecución
+   *   - Correos comentados: cpelaez@, jmsalinero@ (mantener por referencia histórica)
+   */
 
-    V_IMPAR varchar(15);
-    V_numero varchar(15);
-    v_denom  varchar(151);
-    V_FECHA_CON varchar(151);
-    V_ULT_CON varchar(151);
-    d_dia varchar(151);
-    d_dia1 varchar(151);
-    d_dia2 varchar(151);
-  --CHEQUEO RELOJES.
- CURSOR C2 is
- select DECODE(to_char(FECHA, 'dd/mm/yyyy'),
-              to_char(sysdate, 'dd/mm/yyyy'),
-              '0',
-              '1') as IMPAR,
-       t.numero AS NUM_FIN,
-       denom AS DENOM_FIN,
-       to_char(Fecha, 'dd/mm/yyyy') AS FECHA,
-       to_char(hora, 'hh24:MI:SS') as ULT_CON
-  from transacciones t, relojes r
- where t.fecha > sysdate - 15
-   and to_number(t.numero) = to_number(r.numero)
-   and r.activo = 'S'
-   and (t.numserie, t.numero) in
-       (select max(numserie), numero
-          from transacciones
-         where fecha between sysdate - 15 and sysdate + 5
-           and numero not in ('91', 'MA','88','90')
-         group by numero)
- order by t.numero;
+  -- Constantes
+  C_DIAS_VENTANA        CONSTANT NUMBER := 15;
+  C_DIAS_FUTURO         CONSTANT NUMBER := 5;
+  C_ESTADO_ACTIVO       CONSTANT VARCHAR2(1) := 'S';
+  C_RELOJ_EXCL_1        CONSTANT VARCHAR2(2) := '91';
+  C_RELOJ_EXCL_2        CONSTANT VARCHAR2(2) := 'MA';
+  C_RELOJ_EXCL_3        CONSTANT VARCHAR2(2) := '88';
+  C_RELOJ_EXCL_4        CONSTANT VARCHAR2(2) := '90';
+  C_DIA_SABADO          CONSTANT VARCHAR2(1) := '7';
+  C_DIA_DOMINGO         CONSTANT VARCHAR2(1) := '1';
+  C_FLAG_DESACTUALIZADO CONSTANT VARCHAR2(1) := '1';
+  C_FLAG_ACTUALIZADO    CONSTANT VARCHAR2(1) := '0';
+  C_CORREO_FROM         CONSTANT VARCHAR2(50) := 'noresponda@aytosalamanca.es';
+  C_CORREO_CARLOS       CONSTANT VARCHAR2(50) := 'carlos@aytosalamanca.es';
+  C_CORREO_PERMISOS     CONSTANT VARCHAR2(50) := 'permisos@aytosalamanca.es';
+  C_CORREO_CC           CONSTANT VARCHAR2(1) := '';
+  C_ASUNTO_PREFIJO      CONSTANT VARCHAR2(30) := 'Reloj sin fichajes: ';
+  C_CUERPO_PREFIJO      CONSTANT VARCHAR2(50) := 'Posible avería de reloj, Ultima conexion: ';
 
-begin
+  -- Variables
+  v_impar        VARCHAR2(15);
+  v_numero       VARCHAR2(15);
+  v_denom        VARCHAR2(151);
+  v_fecha_con    VARCHAR2(151);
+  v_ult_con      VARCHAR2(151);
+  d_dia          VARCHAR2(151);
 
---COMPROBaci�n de relojes.
+  -- Cursor: Última transacción de cada reloj activo (últimos 15 días)
+  CURSOR c2 IS
+    SELECT 
+           -- Flag: '1' si última transacción NO es de hoy, '0' si es de hoy
+           DECODE(TO_CHAR(fecha, 'DD/MM/YYYY'),
+                  TO_CHAR(SYSDATE, 'DD/MM/YYYY'),
+                  C_FLAG_ACTUALIZADO,
+                  C_FLAG_DESACTUALIZADO) AS impar,
+           t.numero AS num_fin,
+           denom AS denom_fin,
+           TO_CHAR(fecha, 'DD/MM/YYYY') AS fecha,
+           TO_CHAR(hora, 'HH24:MI:SS') AS ult_con
+    FROM transacciones t
+    INNER JOIN relojes r ON TO_NUMBER(t.numero) = TO_NUMBER(r.numero)
+    WHERE t.fecha > SYSDATE - C_DIAS_VENTANA
+      AND r.activo = C_ESTADO_ACTIVO
+      AND (t.numserie, t.numero) IN (
+            -- Subconsulta: última transacción (max numserie) por reloj
+            SELECT MAX(numserie), numero
+            FROM transacciones
+            WHERE fecha BETWEEN SYSDATE - C_DIAS_VENTANA AND SYSDATE + C_DIAS_FUTURO
+              AND numero NOT IN (C_RELOJ_EXCL_1, C_RELOJ_EXCL_2, C_RELOJ_EXCL_3, C_RELOJ_EXCL_4)
+            GROUP BY numero
+          )
+    ORDER BY t.numero;
 
-delete  temp_reloj_ko;
-commit;
---abrimos cursor.
-OPEN C2;
+BEGIN
 
+  -- **********************************
+  -- FASE 1: Limpiar tabla temporal de relojes problemáticos
+  -- **********************************
+  DELETE FROM temp_reloj_ko;
+  COMMIT;
 
+  -- **********************************
+  -- FASE 2: Obtener día de semana actual
+  -- **********************************
+  SELECT TO_CHAR(SYSDATE, 'D')
+  INTO d_dia
+  FROM DUAL;
 
+  -- **********************************
+  -- FASE 3: Iterar relojes y detectar inactividad
+  -- **********************************
+  OPEN c2;
   LOOP
-    FETCH C2
-      into V_IMPAR, V_numero , v_denom  ,
-           V_FECHA_CON ,  V_ULT_CON;
-    EXIT WHEN C2%NOTFOUND;
+    FETCH c2 INTO v_impar, v_numero, v_denom, v_fecha_con, v_ult_con;
+    EXIT WHEN c2%NOTFOUND;
 
+    -- **********************************
+    -- FASE 4: Evaluar y alertar relojes desactualizados (solo días laborables)
+    -- **********************************
+    IF v_impar = C_FLAG_DESACTUALIZADO 
+       AND (d_dia <> C_DIA_DOMINGO AND d_dia <> C_DIA_SABADO) THEN
+      
+      -- Registrar reloj problemático
+      INSERT INTO temp_reloj_ko VALUES (v_numero);
 
-    select to_char(sysdate,'d')
-    into d_dia
-    from dual;
+      -- Enviar correo a Carlos
+      envio_correo(
+        C_CORREO_FROM,
+        C_CORREO_CARLOS,
+        C_CORREO_CC,
+        C_ASUNTO_PREFIJO || v_denom,
+        C_CUERPO_PREFIJO || v_fecha_con || ' ' || v_ult_con
+      );
 
+      /* Correos adicionales comentados (mantener por referencia histórica)
+      envio_correo(
+        C_CORREO_FROM,
+        'cpelaez@aytosalamanca.es',
+        C_CORREO_CC,
+        C_ASUNTO_PREFIJO || v_denom,
+        C_CUERPO_PREFIJO || v_fecha_con || ' ' || v_ult_con
+      );
 
+      envio_correo(
+        C_CORREO_FROM,
+        'jmsalinero@aytosalamanca.es',
+        C_CORREO_CC,
+        C_ASUNTO_PREFIJO || v_denom,
+        C_CUERPO_PREFIJO || v_fecha_con || ' ' || v_ult_con
+      );
+      */
 
-   IF V_IMPAR = '1'  aND (d_DIA<>'1' AND D_DIA<>'7' )  then --ENVIAMOS CORREO
+      -- Enviar correo a equipo Permisos
+      envio_correo(
+        C_CORREO_FROM,
+        C_CORREO_PERMISOS,
+        C_CORREO_CC,
+        C_ASUNTO_PREFIJO || v_denom,
+        C_CUERPO_PREFIJO || v_fecha_con || ' ' || v_ult_con
+      );
 
-      insert into temp_reloj_ko values(v_numero);
-      envio_correo('noresponda@aytosalamanca.es' ,
-                   'carlos@aytosalamanca.es' ,
-                   '' ,
-                   'Reloj sin fichajes: ' || v_denom,
-                   'Posible aver�a de reloj, Ultima conexion:' ||  V_FECHA_CON || ' ' || V_ULT_CON);
+    END IF;
 
-    /* envio_correo('noresponda@aytosalamanca.es' ,
-                   'cpelaez@aytosalamanca.es' ,
-                   '' ,
-                   'Reloj sin fichajes: ' || v_denom,
-                   'Posible aver�a de reloj, Ultima conexion:' ||  V_FECHA_CON || ' ' || V_ULT_CON);
+  END LOOP;
+  CLOSE c2;
 
-       envio_correo('noresponda@aytosalamanca.es' ,
-                   'jmsalinero@aytosalamanca.es' ,
-                   '' ,
-                   'Reloj sin fichajes: ' || v_denom,
-                   'Posible aver�a de reloj, Ultima conexion:' ||  V_FECHA_CON || ' ' || V_ULT_CON);
-   */     envio_correo('noresponda@aytosalamanca.es' ,
-                   'permisos@aytosalamanca.es' ,
-                   '' ,
-                   'Reloj sin fichajes: ' || v_denom,
-                   'Posible aver�a de reloj, Ultima conexion:' ||  V_FECHA_CON || ' ' || V_ULT_CON);
+EXCEPTION
+  WHEN OTHERS THEN
+    IF c2%ISOPEN THEN
+      CLOSE c2;
+    END IF;
+    ROLLBACK;
+    RAISE;
 
-
-   END IF;
-
-
-END LOOP;
-CLOSE C2;
-
-
-
-
-end FINGER_RELOJES_CHEQUEA;
+END FINGER_RELOJES_CHEQUEA;
 /
 
