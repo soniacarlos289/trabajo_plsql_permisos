@@ -192,7 +192,8 @@ BEGIN
                TO_NUMBER(TO_CHAR(fecha_fin + ((C_MARGEN_AUSENCIA) / 24), 'HH24MI'))
         INTO hinicio, hfin
         FROM ausencia
-        WHERE TRUNC(fecha_inicio) = TRUNC(d_fecha_fichaje)
+        WHERE fecha_inicio >= TRUNC(d_fecha_fichaje)
+          AND fecha_inicio < TRUNC(d_fecha_fichaje) + 1
           AND JUSTIFICADO = C_JUSTIFICADO_SI
           AND id_estado = C_ESTADO_APROBADO
           AND id_funcionario = i_id_funcionario;
@@ -213,7 +214,8 @@ BEGIN
                TO_NUMBER(TO_CHAR(TO_DATE('01/01/1900 ' || NVL(hora_fin, '00:00'), 'DD/MM/YYYY HH24:MI'), 'HH24MI')) + C_MARGEN_PERMISO
         INTO hinicio_com, hfin_com
         FROM permiso
-        WHERE TRUNC(fecha_inicio) = TRUNC(d_fecha_fichaje)
+        WHERE fecha_inicio >= TRUNC(d_fecha_fichaje)
+          AND fecha_inicio < TRUNC(d_fecha_fichaje) + 1
           AND id_tipo_permiso = C_TIPO_PERMISO_15000
           AND id_estado = C_ESTADO_APROBADO
           AND id_funcionario = i_id_funcionario;
