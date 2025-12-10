@@ -19,13 +19,13 @@ Manteniendo **100% de compatibilidad** con la versión anterior.
 Estos procedimientos ya contaban con optimizaciones previas y documentación completa:
 
 1. ✅ **finger_lee_trans.prc**
-   - Constantes definidas: 17
+   - Constantes definidas: 21
    - Documentación: Completa con JavaDoc
    - Estructura: 7 fases bien documentadas
    - Manejo excepciones: Robusto
 
 2. ✅ **finger_busca_jornada_fun.prc**
-   - Constantes definidas: 8
+   - Constantes definidas: 6
    - Documentación: Completa
    - Lógica: Optimizada con ajuste día semana
    - Estructura: 2 fases claras
@@ -49,7 +49,7 @@ Estos procedimientos ya contaban con optimizaciones previas y documentación com
    - Monitoreo: Relojes 24/7
 
 6. ✅ **finger_regenera_saldo_diario.prc**
-   - Constantes definidas: 4
+   - Constantes definidas: 3
    - Documentación: Completa
    - Registro: Control ejecuciones
    - Cálculo: Día actual o anterior
@@ -215,7 +215,7 @@ Estos procedimientos ya contaban con optimizaciones previas y documentación com
 | mete_fichaje_finger_new.prc | 0 | 16 | **+∞** |
 | anula_fichaje_finger_15000.prc | 0 | 7 | **+∞** |
 | **TOTAL OPTIMIZADOS** | **0** | **79** | **+∞** |
-| **TOTAL PROYECTO (10 proc)** | **58** | **137** | **+136%** |
+| **TOTAL PROYECTO (10 proc)** | **59** | **138** | **+134%** |
 
 ### Documentación
 
